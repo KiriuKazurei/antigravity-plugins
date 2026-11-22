@@ -238,9 +238,9 @@
       }
     }
     const combined = `${modelName || ''} ${modelEnum || ''}`.toLowerCase();
-    if (/2m|2000k|gemini-1\.5-pro/i.test(combined)) return 2000000;
-    if (/1m|1000k|gemini|hydrogen/i.test(combined)) return 1000000;
-    if (/claude|sonnet|opus|haiku/i.test(combined)) return /1m/i.test(combined) ? 1000000 : 200000;
+    if (/\b2m\b|\b2000k\b|gemini-1\.5-pro/i.test(combined)) return 2000000;
+    if (/\b1m\b|\b1000k\b|gemini|hydrogen/i.test(combined)) return 1000000;
+    if (/claude|sonnet|opus|haiku/i.test(combined)) return 200000;
     if (/gpt-5|gpt-4\.1/i.test(combined)) return /4\.1/i.test(combined) ? 1000000 : 400000;
     if (/gpt-4o|o1|o3|o4|deepseek|qwen/i.test(combined)) return 200000;
     return 1000000;
@@ -1546,9 +1546,14 @@
   }
 
   let activeRefreshInFlight = false;
+  let pendingTargetRefresh = false;
   async function refreshTargetSession(forceRefresh) {
-    if (activeRefreshInFlight) return;
+    if (activeRefreshInFlight) {
+      pendingTargetRefresh = true;
+      return;
+    }
     activeRefreshInFlight = true;
+    pendingTargetRefresh = false;
     state.loading = true;
     try {
       syncFromSiblingPlugins();
@@ -1628,7 +1633,11 @@
       state.loading = false;
       activeRefreshInFlight = false;
       recomputeState();
-      renderAll();
+      renderAll({ fromPoll: !forceRefresh });
+      if (pendingTargetRefresh) {
+        pendingTargetRefresh = false;
+        refreshTargetSession(true);
+      }
     }
   }
 
@@ -1695,24 +1704,17 @@
       state.rawSources.trajectories = data;
       touched = true;
     } else if (method === 'GetCascadeTrajectoryGeneratorMetadata') {
-      const cid = explicitCid || state.activeCascadeId;
+      if (!explicitCid) return;
       const list = data.generatorMetadata || data.generator_metadata;
-      if (cid && Array.isArray(list) && list.length > 0 && !explicitCid) {
-        // 仅当未发生兄弟插件批量回溯污染或明确属于当前会话时写入
-        const existing = state.generatorCache.get(cid);
-        if (!existing || list.length >= existing.list.length) {
-          state.generatorCache.set(cid, { stamp: String(Date.now()), list });
-          touched = true;
-        }
-      } else if (cid && explicitCid && Array.isArray(list) && list.length > 0) {
-        state.generatorCache.set(cid, { stamp: String(Date.now()), list });
+      if (Array.isArray(list) && list.length > 0) {
+        state.generatorCache.set(explicitCid, { stamp: String(Date.now()), list });
         touched = true;
       }
     } else if (method === 'GetCascadeTrajectory' || method === 'GetCascadeTrajectorySteps') {
-      const cid = explicitCid || state.activeCascadeId;
+      if (!explicitCid) return;
       const steps = extractStepsFromTrajectoryResponse(data);
-      if (cid && steps.length > 0) {
-        state.stepsCache.set(cid, { stamp: String(Date.now()), steps });
+      if (steps.length > 0) {
+        state.stepsCache.set(explicitCid, { stamp: String(Date.now()), steps });
         touched = true;
       }
     }
@@ -2367,11 +2369,26 @@
     document.head.appendChild(st);
   }
 
+  function applyMenuBadgeState(badge, analysis) {
+    if (!badge) return;
+    const pctText = analysis && analysis.latestContextTokens > 0 ? `${Math.round(analysis.occupancyPct)}%` : '--';
+    badge.textContent = pctText;
+    if (analysis && analysis.occupancyPct >= state.prefs.criticalThresholdPct) {
+      badge.style.background = 'rgba(239,68,68,0.18)';
+      badge.style.color = '#f87171';
+    } else if (analysis && analysis.occupancyPct >= state.prefs.warnThresholdPct) {
+      badge.style.background = 'rgba(245,158,11,0.18)';
+      badge.style.color = '#fbbf24';
+    } else {
+      badge.style.background = '';
+      badge.style.color = '';
+    }
+  }
+
   function createMenuItemElement(siblingBtn) {
     ensureMenuInjectStyles();
     const isZh = state.isZh;
     const a = state.computed.activeAnalysis;
-    const pctText = a && a.latestContextTokens > 0 ? `${Math.round(a.occupancyPct)}%` : '--';
 
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -2391,29 +2408,7 @@
     const left = document.createElement('span');
     left.className = 'agy-cd-menu-left';
 
-    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    icon.setAttribute('viewBox', '0 0 16 16');
-    icon.setAttribute('width', '15');
-    icon.setAttribute('height', '15');
-    icon.setAttribute('fill', 'none');
-    icon.setAttribute('stroke', 'currentColor');
-    icon.setAttribute('stroke-width', '1.5');
-    icon.style.flexShrink = '0';
-    icon.style.opacity = '0.88';
-    const arc = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    arc.setAttribute('d', 'M2.5 11.5a6.2 6.2 0 1 1 11 0');
-    arc.setAttribute('stroke-linecap', 'round');
-    const needle = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    needle.setAttribute('d', 'M8 9.2L10.8 6.2');
-    needle.setAttribute('stroke-linecap', 'round');
-    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    dot.setAttribute('cx', '8');
-    dot.setAttribute('cy', '9.5');
-    dot.setAttribute('r', '1.1');
-    dot.setAttribute('fill', 'currentColor');
-    icon.appendChild(arc);
-    icon.appendChild(needle);
-    icon.appendChild(dot);
+    const icon = buildGaugeIconSvg(15);
 
     const label = document.createElement('span');
     label.textContent = isZh ? '上下文洞察' : 'Context Doctor';
@@ -2423,14 +2418,7 @@
 
     const badge = document.createElement('span');
     badge.className = 'agy-cd-menu-badge';
-    badge.textContent = pctText;
-    if (a && a.occupancyPct >= state.prefs.criticalThresholdPct) {
-      badge.style.background = 'rgba(239,68,68,0.18)';
-      badge.style.color = '#f87171';
-    } else if (a && a.occupancyPct >= state.prefs.warnThresholdPct) {
-      badge.style.background = 'rgba(245,158,11,0.18)';
-      badge.style.color = '#fbbf24';
-    }
+    applyMenuBadgeState(badge, a);
 
     btn.appendChild(left);
     btn.appendChild(badge);
@@ -2449,17 +2437,37 @@
     if (typeof document === 'undefined' || !document.querySelectorAll) return false;
     const innerH = window.innerHeight || 800;
 
-    // 更新已注入菜单项上的百分比徽章
+    // 更新已注入菜单项上的百分比徽章与状态色
     const existingItems = document.querySelectorAll('[data-agy-cd-menu-item="1"]');
     const a = state.computed.activeAnalysis;
-    const pctText = a && a.latestContextTokens > 0 ? `${Math.round(a.occupancyPct)}%` : '--';
     for (let i = 0; i < existingItems.length; i++) {
       const b = existingItems[i].querySelector('.agy-cd-menu-badge');
-      if (b) b.textContent = pctText;
+      applyMenuBadgeState(b, a);
     }
 
-    // 寻找右侧边栏「插件 >」打开后的浮动子菜单（内含插件标题或 Swarm 选项）
-    const containers = document.querySelectorAll('div, ul, [role="menu"]');
+    // 寻找右侧边栏「插件 >」打开后的浮动子菜单（仅扫描顶层 Portal/弹窗子树及标准 menu 节点，避免全树遍历）
+    const candidateSet = new Set();
+    if (document.body && document.body.children) {
+      const topEls = document.body.children;
+      for (let i = 0; i < topEls.length; i++) {
+        const top = topEls[i];
+        if (!isOutsidePluginHosts(top)) continue;
+        candidateSet.add(top);
+        const lvl1 = top.children || [];
+        for (let j = 0; j < lvl1.length && j < 12; j++) {
+          candidateSet.add(lvl1[j]);
+          const lvl2 = lvl1[j].children || [];
+          for (let k = 0; k < lvl2.length && k < 12; k++) {
+            candidateSet.add(lvl2[k]);
+          }
+        }
+      }
+    }
+    const roleMenus = document.querySelectorAll('[role="menu"], [data-radix-popper-content-wrapper], [data-floating-ui-portal]');
+    for (let i = 0; i < roleMenus.length; i++) {
+      candidateSet.add(roleMenus[i]);
+    }
+    const containers = Array.from(candidateSet);
     let injected = false;
     for (let i = 0; i < containers.length; i++) {
       const c = containers[i];
@@ -2636,42 +2644,56 @@
   }
 
   let auxSyncScheduled = false;
+  let auxSyncTimer = null;
+  let auxSyncLastAt = 0;
+  const AUX_SYNC_MIN_INTERVAL_MS = 120;
+
+  function flushAuxSync() {
+    auxSyncScheduled = false;
+    auxSyncTimer = null;
+    auxSyncLastAt = Date.now();
+    syncPluginsMenuInjection();
+    if (state.tabOpen) {
+      syncAuxTabInStrip();
+    }
+    if (state.prefs.open) {
+      const aux = locateNativeAuxPane();
+      if (state.openedInNativePane && !aux.found) {
+        // 用户关闭了原生右侧边栏，自动隐藏当前分页
+        state.prefs.open = false;
+        state.openedInNativePane = false;
+        savePrefs(state.prefs);
+        renderAll();
+        return;
+      }
+      if (aux.found) {
+        const prev = state.lastAuxRect;
+        if (
+          !prev ||
+          prev.left !== aux.left ||
+          prev.top !== aux.top ||
+          prev.width !== aux.width ||
+          prev.height !== aux.height ||
+          prev.hasNativeTabStrip !== aux.hasNativeTabStrip
+        ) {
+          state.lastAuxRect = aux;
+          applySidebarGeometry();
+        }
+      }
+    }
+  }
+
   function scheduleAuxSync() {
-    if (auxSyncScheduled) return;
-    auxSyncScheduled = true;
-    const raf = typeof window.requestAnimationFrame === 'function' ? window.requestAnimationFrame : (fn) => setTimeout(fn, 16);
-    raf(() => {
-      auxSyncScheduled = false;
-      syncPluginsMenuInjection();
-      if (state.tabOpen) {
-        syncAuxTabInStrip();
-      }
-      if (state.prefs.open) {
-        const aux = locateNativeAuxPane();
-        if (state.openedInNativePane && !aux.found) {
-          // 用户关闭了原生右侧边栏，自动隐藏当前分页
-          state.prefs.open = false;
-          state.openedInNativePane = false;
-          savePrefs(state.prefs);
-          renderAll();
-          return;
-        }
-        if (aux.found) {
-          const prev = state.lastAuxRect;
-          if (
-            !prev ||
-            prev.left !== aux.left ||
-            prev.top !== aux.top ||
-            prev.width !== aux.width ||
-            prev.height !== aux.height ||
-            prev.hasNativeTabStrip !== aux.hasNativeTabStrip
-          ) {
-            state.lastAuxRect = aux;
-            applySidebarGeometry();
-          }
-        }
-      }
-    });
+    if (auxSyncScheduled || auxSyncTimer) return;
+    const elapsed = Date.now() - auxSyncLastAt;
+    if (elapsed >= AUX_SYNC_MIN_INTERVAL_MS) {
+      auxSyncScheduled = true;
+      const raf =
+        typeof window.requestAnimationFrame === 'function' ? window.requestAnimationFrame : (fn) => setTimeout(fn, 16);
+      raf(flushAuxSync);
+    } else {
+      auxSyncTimer = setTimeout(flushAuxSync, AUX_SYNC_MIN_INTERVAL_MS - elapsed);
+    }
   }
 
   function installAuxPaneWatcher() {
@@ -2698,7 +2720,10 @@
 
         const strip = locateNativeAuxTabStrip();
         if (strip.found && strip.stripEl && strip.stripEl.contains && strip.stripEl.contains(t)) {
-          switchAwayFromContextDoctor();
+          const stripBtn = t.closest ? t.closest('button, [role="tab"], [role="button"], a') : null;
+          if (stripBtn && strip.stripEl.contains(stripBtn)) {
+            switchAwayFromContextDoctor();
+          }
           return;
         }
 
@@ -4106,6 +4131,105 @@
     }
     body.appendChild(filterRow);
 
+    const listWrap = h('div', { style: 'display:flex; flex-direction:column; gap:8px;' });
+
+    function renderHitterList() {
+      const prevScrollTop = refs.body ? refs.body.scrollTop || 0 : 0;
+      listWrap.textContent = '';
+
+      const q = state.hitterQuery.trim().toLowerCase();
+      let list = steps.filter((s) => {
+        if (state.hitterFilter === 'error') {
+          if (!s.isError) return false;
+        } else if (state.hitterFilter !== 'all' && s.category !== state.hitterFilter) {
+          return false;
+        }
+        if (q) {
+          const hay = `${s.title} ${s.filePath} ${s.commandStr} ${s.badge} ${s.preview}`.toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+
+      if (state.hitterSort === 'size') list = [...list].sort((x, y) => y.estTokens - x.estTokens);
+      else if (state.hitterSort === 'desc') list = [...list].sort((x, y) => y.index - x.index);
+      else list = [...list].sort((x, y) => x.index - y.index);
+
+      if (list.length === 0) {
+        listWrap.appendChild(
+          h('div', { className: 'empty', textContent: isZh ? '没有匹配的轨迹步骤' : 'No matching trajectory steps' })
+        );
+        if (refs.body) refs.body.scrollTop = prevScrollTop;
+        return;
+      }
+
+      for (const s of list.slice(0, 60)) {
+        const expanded = state.expandedSteps.has(s.index);
+        const color = CAT_COLORS[s.category] || '#64748b';
+        const row = h('div', {
+          className: 'step-row',
+          onClick: () => {
+            if (state.expandedSteps.has(s.index)) state.expandedSteps.delete(s.index);
+            else state.expandedSteps.add(s.index);
+            renderHitterList();
+          },
+        });
+
+        row.appendChild(
+          h('div', { className: 'step-top' }, [
+            h('span', { className: 'badge', textContent: `#${s.index} ${s.badge}` }),
+            h('span', { className: 'step-title', title: s.title, textContent: s.title }),
+            h('span', {
+              className: 'step-tok',
+              style: s.isError ? 'color:var(--red)' : '',
+              textContent: `~${formatTokens(s.estTokens)}`,
+            }),
+          ])
+        );
+
+        row.appendChild(
+          h('div', { className: 'mini-bar' }, [
+            h('div', {
+              style: `width:${Math.min(100, Math.max(2, s.sharePct)).toFixed(1)}%; background:${color};`,
+            }),
+          ])
+        );
+
+        if (expanded) {
+          row.appendChild(
+            h(
+              'div',
+              {
+                style: 'display:flex; justify-content:space-between; align-items:center; margin-top:6px; font-size:10px; color:var(--fg-muted);',
+              },
+              [
+                h('span', {
+                  textContent: `${formatBytes(s.chars)} · ${formatPct(s.sharePct)} ${isZh ? '占比' : 'share'}${
+                    s.isError ? ' · ERROR' : ''
+                  }`,
+                }),
+                h('button', {
+                  className: 'pill-btn',
+                  textContent: isZh ? '复制内容' : 'Copy',
+                  onClick: (ev) => {
+                    ev.stopPropagation();
+                    copyToClipboard(s.preview || s.title).then((ok) => {
+                      if (ok) showToast(isZh ? '已复制步骤内容' : 'Copied step content');
+                    });
+                  },
+                }),
+              ]
+            )
+          );
+          if (s.preview) {
+            row.appendChild(h('div', { className: 'step-preview', textContent: s.preview }));
+          }
+        }
+        listWrap.appendChild(row);
+      }
+      if (refs.body) refs.body.scrollTop = prevScrollTop;
+    }
+
     const searchRow = h('div', { style: 'display:flex; gap:6px; align-items:center;' });
     const searchInput = h('input', {
       className: 'input',
@@ -4114,13 +4238,7 @@
     });
     searchInput.addEventListener('input', (e) => {
       state.hitterQuery = e.target.value || '';
-      renderBody();
-      // Keep focus
-      const inp = refs.body && refs.body.querySelector('input.input');
-      if (inp) {
-        inp.focus();
-        inp.setSelectionRange(state.hitterQuery.length, state.hitterQuery.length);
-      }
+      renderHitterList();
     });
     const sortBtn = h('button', {
       className: 'pill-btn',
@@ -4145,94 +4263,8 @@
     searchRow.appendChild(searchInput);
     searchRow.appendChild(sortBtn);
     body.appendChild(searchRow);
-
-    const q = state.hitterQuery.trim().toLowerCase();
-    let list = steps.filter((s) => {
-      if (state.hitterFilter === 'error') {
-        if (!s.isError) return false;
-      } else if (state.hitterFilter !== 'all' && s.category !== state.hitterFilter) {
-        return false;
-      }
-      if (q) {
-        const hay = `${s.title} ${s.filePath} ${s.commandStr} ${s.badge} ${s.preview}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      return true;
-    });
-
-    if (state.hitterSort === 'size') list = [...list].sort((x, y) => y.estTokens - x.estTokens);
-    else if (state.hitterSort === 'desc') list = [...list].sort((x, y) => y.index - x.index);
-    else list = [...list].sort((x, y) => x.index - y.index);
-
-    if (list.length === 0) {
-      body.appendChild(h('div', { className: 'empty', textContent: isZh ? '没有匹配的轨迹步骤' : 'No matching trajectory steps' }));
-      return;
-    }
-
-    for (const s of list.slice(0, 60)) {
-      const expanded = state.expandedSteps.has(s.index);
-      const color = CAT_COLORS[s.category] || '#64748b';
-      const row = h('div', {
-        className: 'step-row',
-        onClick: () => {
-          if (state.expandedSteps.has(s.index)) state.expandedSteps.delete(s.index);
-          else state.expandedSteps.add(s.index);
-          renderBody();
-        },
-      });
-
-      row.appendChild(
-        h('div', { className: 'step-top' }, [
-          h('span', { className: 'badge', textContent: `#${s.index} ${s.badge}` }),
-          h('span', { className: 'step-title', title: s.title, textContent: s.title }),
-          h('span', {
-            className: 'step-tok',
-            style: s.isError ? 'color:var(--red)' : '',
-            textContent: `~${formatTokens(s.estTokens)}`,
-          }),
-        ])
-      );
-
-      row.appendChild(
-        h('div', { className: 'mini-bar' }, [
-          h('div', {
-            style: `width:${Math.min(100, Math.max(2, s.sharePct)).toFixed(1)}%; background:${color};`,
-          }),
-        ])
-      );
-
-      if (expanded) {
-        row.appendChild(
-          h(
-            'div',
-            {
-              style: 'display:flex; justify-content:space-between; align-items:center; margin-top:6px; font-size:10px; color:var(--fg-muted);',
-            },
-            [
-              h('span', {
-                textContent: `${formatBytes(s.chars)} · ${formatPct(s.sharePct)} ${isZh ? '占比' : 'share'}${
-                  s.isError ? ' · ERROR' : ''
-                }`,
-              }),
-              h('button', {
-                className: 'pill-btn',
-                textContent: isZh ? '复制内容' : 'Copy',
-                onClick: (ev) => {
-                  ev.stopPropagation();
-                  copyToClipboard(s.preview || s.title).then((ok) => {
-                    if (ok) showToast(isZh ? '已复制步骤内容' : 'Copied step content');
-                  });
-                },
-              }),
-            ]
-          )
-        );
-        if (s.preview) {
-          row.appendChild(h('div', { className: 'step-preview', textContent: s.preview }));
-        }
-      }
-      body.appendChild(row);
-    }
+    body.appendChild(listWrap);
+    renderHitterList();
   }
 
   function renderFleetTab(body) {
@@ -4405,6 +4437,61 @@
     body.appendChild(chartCard);
 
     // Search & sort
+    const listWrap = h('div', { style: 'display:flex; flex-direction:column; gap:8px;' });
+
+    function renderSessionList() {
+      const prevScrollTop = refs.body ? refs.body.scrollTop || 0 : 0;
+      listWrap.textContent = '';
+
+      const q = state.insightsQuery.trim().toLowerCase();
+      let list = ins.sessions.filter((s) => {
+        if (!q) return true;
+        return `${s.summary} ${s.model} ${s.cascadeId}`.toLowerCase().includes(q);
+      });
+      if (state.insightsSort === 'tokens') list = [...list].sort((a, b) => b.totalTokens - a.totalTokens);
+      else if (state.insightsSort === 'steps') list = [...list].sort((a, b) => b.stepCount - a.stepCount);
+
+      const currentTargetCid =
+        (state.computed.activeAnalysis && state.computed.activeAnalysis.cascadeId) || '';
+      const now = Date.now();
+
+      for (const s of list.slice(0, 30)) {
+        const card = h(
+          'div',
+          {
+            className: `sess-card ${s.cascadeId === currentTargetCid ? 'current' : ''}`,
+            onClick: () => {
+              state.inspectedCascadeId = s.cascadeId === state.activeCascadeId ? '' : s.cascadeId;
+              state.handoffDirty = false;
+              state.prefs.activeTab = 'overview';
+              savePrefs(state.prefs);
+              refreshTargetSession(true);
+            },
+          },
+          [
+            h('div', { style: 'display:flex; justify-content:space-between; gap:6px; align-items:center;' }, [
+              h('span', {
+                style: 'font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;',
+                title: s.summary,
+                textContent: (s.isSubtrajectory ? '↳ ' : '') + s.summary,
+              }),
+              h('span', { className: 'badge', textContent: formatTokens(s.totalTokens) }),
+            ]),
+            h('div', {
+              style: 'display:flex; justify-content:space-between; font-size:10.5px; color:var(--fg-muted); margin-top:4px;',
+              textContent: `${s.model} · ${s.stepCount} steps · ${formatPct(s.occupancyPct)} ctx · ${formatRelativeTime(
+                s.lastModifiedMs,
+                now,
+                isZh
+              )}`,
+            }),
+          ]
+        );
+        listWrap.appendChild(card);
+      }
+      if (refs.body) refs.body.scrollTop = prevScrollTop;
+    }
+
     const row = h('div', { style: 'display:flex; gap:6px;' });
     const inp = h('input', {
       className: 'input',
@@ -4413,12 +4500,7 @@
     });
     inp.addEventListener('input', (e) => {
       state.insightsQuery = e.target.value || '';
-      renderBody();
-      const el = refs.body && refs.body.querySelector('input.input');
-      if (el) {
-        el.focus();
-        el.setSelectionRange(state.insightsQuery.length, state.insightsQuery.length);
-      }
+      renderSessionList();
     });
     const sortBtn = h('button', {
       className: 'pill-btn',
@@ -4441,53 +4523,8 @@
     row.appendChild(inp);
     row.appendChild(sortBtn);
     body.appendChild(row);
-
-    const q = state.insightsQuery.trim().toLowerCase();
-    let list = ins.sessions.filter((s) => {
-      if (!q) return true;
-      return `${s.summary} ${s.model} ${s.cascadeId}`.toLowerCase().includes(q);
-    });
-    if (state.insightsSort === 'tokens') list = [...list].sort((a, b) => b.totalTokens - a.totalTokens);
-    else if (state.insightsSort === 'steps') list = [...list].sort((a, b) => b.stepCount - a.stepCount);
-
-    const currentTargetCid =
-      (state.computed.activeAnalysis && state.computed.activeAnalysis.cascadeId) || '';
-    const now = Date.now();
-
-    for (const s of list.slice(0, 30)) {
-      const card = h(
-        'div',
-        {
-          className: `sess-card ${s.cascadeId === currentTargetCid ? 'current' : ''}`,
-          onClick: () => {
-            state.inspectedCascadeId = s.cascadeId === state.activeCascadeId ? '' : s.cascadeId;
-            state.handoffDirty = false;
-            state.prefs.activeTab = 'overview';
-            savePrefs(state.prefs);
-            refreshTargetSession(true);
-          },
-        },
-        [
-          h('div', { style: 'display:flex; justify-content:space-between; gap:6px; align-items:center;' }, [
-            h('span', {
-              style: 'font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;',
-              title: s.summary,
-              textContent: (s.isSubtrajectory ? '↳ ' : '') + s.summary,
-            }),
-            h('span', { className: 'badge', textContent: formatTokens(s.totalTokens) }),
-          ]),
-          h('div', {
-            style: 'display:flex; justify-content:space-between; font-size:10.5px; color:var(--fg-muted); margin-top:4px;',
-            textContent: `${s.model} · ${s.stepCount} steps · ${formatPct(s.occupancyPct)} ctx · ${formatRelativeTime(
-              s.lastModifiedMs,
-              now,
-              isZh
-            )}`,
-          }),
-        ]
-      );
-      body.appendChild(card);
-    }
+    body.appendChild(listWrap);
+    renderSessionList();
   }
 
   function renderHandoffTab(body) {
@@ -4620,6 +4657,7 @@
 
   function renderBody() {
     if (!refs.body) return;
+    const prevScrollTop = refs.body.scrollTop || 0;
     refs.body.textContent = '';
     const tab = state.prefs.activeTab;
     if (tab === 'overview') renderOverviewTab(refs.body);
@@ -4627,6 +4665,7 @@
     else if (tab === 'fleet') renderFleetTab(refs.body);
     else if (tab === 'insights') renderInsightsTab(refs.body);
     else if (tab === 'handoff') renderHandoffTab(refs.body);
+    refs.body.scrollTop = prevScrollTop;
   }
 
   function renderSettingsPopover() {
@@ -4783,7 +4822,7 @@
     }
   }
 
-  function renderAll() {
+  function renderAll(opts) {
     if (!ensureShadowDom()) return;
     const isZh = state.isZh;
     refs.root.className = `root ${state.isDark ? '' : 'light'}`;
@@ -4824,7 +4863,19 @@
 
     renderGaugeBox();
     renderTabs();
-    renderBody();
+    const activeEl = shadowRootRef && shadowRootRef.activeElement;
+    const isEditingInBody = !!(
+      opts &&
+      opts.fromPoll &&
+      activeEl &&
+      refs.body &&
+      refs.body.contains &&
+      refs.body.contains(activeEl) &&
+      (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')
+    );
+    if (!isEditingInBody) {
+      renderBody();
+    }
     renderSettingsPopover();
     renderToastOnly();
     syncPluginsMenuInjection();

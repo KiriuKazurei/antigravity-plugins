@@ -96,6 +96,8 @@ assert.strictEqual(
   api.resolveModelContextLimit('Claude Sonnet 4.5', '', { 'Claude Sonnet 4.5': 400000 }),
   400000
 );
+assert.strictEqual(api.resolveModelContextLimit('custom-v2m', 'MODEL_V1M', {}), 1000000);
+assert.strictEqual(api.resolveModelContextLimit('Claude v2m', 'MODEL_V1M', {}), 200000);
 
 // 1.2 estimateTokensFromText
 assert(api.estimateTokensFromText('你好世界') >= 4);
@@ -613,6 +615,82 @@ for (const tab of ['overview', 'hitters', 'fleet', 'insights', 'handoff']) {
   domApi.recomputeState();
   domApi.renderAll();
 }
+
+// 回归验证 1：无 explicitCid 的迟到 RPC 响应不得污染 activeCascadeId / stepsCache
+const stepsCountBefore = st.stepsCache.size;
+const mainStepsBefore = st.stepsCache.get('cid-main').steps.length;
+domCtx.__AGY_ON_RPC_DATA__('GetCascadeTrajectorySteps', {
+  trajectory: {
+    steps: [
+      {
+        type: 'CORTEX_STEP_TYPE_USER_INPUT',
+        userInput: { userResponse: 'other-session-leak' },
+      },
+    ],
+  },
+});
+assert.strictEqual(st.activeCascadeId, 'cid-main', 'missing cascadeId RPC must not overwrite activeCascadeId');
+assert.strictEqual(st.stepsCache.size, stepsCountBefore, 'missing cascadeId RPC must not insert stray cache entry');
+assert.strictEqual(st.stepsCache.get('cid-main').steps.length, mainStepsBefore, 'missing cascadeId RPC must not overwrite cid-main steps');
+
+// 回归验证 2：renderAll({ fromPoll: true }) 在用户聚焦搜索框时不销毁 INPUT（保护中文 IME 与光标），且本地筛选不重建 INPUT
+st.prefs.activeTab = 'hitters';
+domApi.renderAll();
+const bodyInputBefore = hostEl.shadowRoot.querySelector('input.input');
+assert(bodyInputBefore, 'hitters tab must render search input');
+hostEl.shadowRoot.activeElement = bodyInputBefore;
+domApi.renderAll({ fromPoll: true });
+assert.strictEqual(
+  hostEl.shadowRoot.querySelector('input.input'),
+  bodyInputBefore,
+  'poll renderAll({ fromPoll: true }) must preserve active input element'
+);
+if (Array.isArray(bodyInputBefore.listeners.input) && bodyInputBefore.listeners.input.length > 0) {
+  bodyInputBefore.listeners.input[0]({ target: { value: 'auth' } });
+  assert.strictEqual(
+    hostEl.shadowRoot.querySelector('input.input'),
+    bodyInputBefore,
+    'typing in hitters search must only update listWrap and keep input element intact'
+  );
+}
+hostEl.shadowRoot.activeElement = null;
+
+// 回归验证 3：菜单徽章在跨越告警/危险阈值后重刷颜色，并在回落时清除内联警告色
+st.generatorCache.set('cid-main', {
+  stamp: 'high',
+  list: [
+    {
+      executionId: 'e-high',
+      timestamp: '2026-11-23T06:12:00Z',
+      chatModel: {
+        model: 'Claude Sonnet 4.5',
+        usage: { inputTokens: 180000, cacheReadTokens: 0, outputTokens: 2000 },
+      },
+    },
+  ],
+});
+domApi.recomputeState();
+domApi.syncPluginsMenuInjection();
+const badgeEl = injectedItems[0].querySelector('.agy-cd-menu-badge');
+assert(badgeEl, 'menu item must contain badge element');
+assert.strictEqual(badgeEl.style.color, '#f87171', 'critical occupancy must color menu badge red');
+
+st.generatorCache.set('cid-main', {
+  stamp: 'low',
+  list: [
+    {
+      executionId: 'e-low',
+      timestamp: '2026-11-23T06:13:00Z',
+      chatModel: {
+        model: 'Claude Sonnet 4.5',
+        usage: { inputTokens: 10000, cacheReadTokens: 0, outputTokens: 500 },
+      },
+    },
+  ],
+});
+domApi.recomputeState();
+domApi.syncPluginsMenuInjection();
+assert.strictEqual(badgeEl.style.color, '', 'normal occupancy must reset inline badge color');
 
 // 切到原生「审查确认」分页时保留标签但隐藏内容
 domApi.switchAwayFromContextDoctor();
