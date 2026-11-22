@@ -1,0 +1,14 @@
+{
+  "enabled": false,
+  "provider": "feishu",
+  "webhookUrl": "",
+  "secret": "",
+  "telegramBotToken": "",
+  "telegramChatId": "",
+  "customHeaders": {},
+  "notifyOnComplete": true,
+  "notifyOnError": true,
+  "notifyOnMaxLimit": true,
+  "notifyOnCancel": false,
+  "titlePrefix": "Antigravity"
+}

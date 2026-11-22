@@ -1,0 +1,14 @@
+{
+  "name": "antigravity-context-doctor",
+  "displayName": "Antigravity 上下文洞察与诊断面板",
+  "version": "1.0.0",
+  "description": "模仿 dsh-context 在右侧边栏实时可视化 Antigravity 上下文窗口占用、构成拆解、上下文大户排行、文件活动追踪、Multi-Agent 编队、7 天跨会话洞察及一键生成无痛交接 Prompt。",
+  "author": "Antigravity Community",
+  "uiScripts": [
+    "runtime/context-doctor.js"
+  ],
+  "suggestedPrompts": [
+    "帮我分析当前会话的上下文消耗与大户步骤",
+    "生成当前任务的跨会话交接 Prompt"
+  ]
+}

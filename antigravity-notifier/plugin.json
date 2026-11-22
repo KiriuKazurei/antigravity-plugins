@@ -1,0 +1,14 @@
+{
+  "name": "antigravity-notifier",
+  "displayName": "Antigravity 任务通知与远程推送",
+  "version": "1.0.0",
+  "description": "实时监听任务完成、等待用户授权及异常中断，提供桌面系统弹窗、Web Audio 提示音、标题闪烁提醒及飞书/企业微信/Discord/Telegram Webhook 远程推送。",
+  "author": "Antigravity Community",
+  "uiScripts": [
+    "runtime/notifier.js"
+  ],
+  "suggestedPrompts": [
+    "帮我配置 antigravity-notifier 的飞书或企业微信 Webhook 远程推送",
+    "测试并检查 antigravity-notifier 任务完成与等待确认通知状态"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "notifier-auto-heal": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "python scripts/session_hook.py",
+        "timeout": 15
+      }
+    ]
+  },
+  "notifier-stop-webhook": {
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python scripts/notify_hook.py",
+        "timeout": 8
+      }
+    ]
+  }
+}

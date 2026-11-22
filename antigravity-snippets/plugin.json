@@ -1,0 +1,14 @@
+{
+  "name": "antigravity-snippets",
+  "displayName": "Antigravity Prompt 模板库 (Snippets)",
+  "version": "1.0.0",
+  "description": "通过 # 实时检索并 Tab 快捷插入高频 Prompt 模板，支持 title 优先匹配、动态变量填空、光标锚点与模板库管理。",
+  "author": "Antigravity Community",
+  "uiScripts": [
+    "runtime/snippets.js"
+  ],
+  "suggestedPrompts": [
+    "在 Antigravity 中调整 Prompt 模板库的默认模板或快捷键",
+    "排查 # 快捷模板菜单未弹出或插入异常的问题"
+  ]
+}

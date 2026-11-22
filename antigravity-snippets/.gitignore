@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+runtime/loader.log
+runtime/heal.log
+runtime/heal_state.json
+runtime/snippets.json
+runtime/*.tmp
+.DS_Store
+Thumbs.db

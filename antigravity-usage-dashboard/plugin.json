@@ -1,0 +1,14 @@
+{
+  "name": "antigravity-usage-dashboard",
+  "displayName": "Antigravity 模型 Usage 仪表盘",
+  "version": "1.0.1",
+  "description": "在左侧边栏底部悬浮展示模型配额（Quota）、剩余百分比、Credits 与重置倒计时。",
+  "author": "Antigravity Community",
+  "uiScripts": [
+    "runtime/usage-dashboard.js"
+  ],
+  "suggestedPrompts": [
+    "调整侧边栏模型 Usage Dashboard 的显示样式或刷新频率",
+    "排查模型 Usage Dashboard 数据未更新的问题"
+  ]
+}

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.tmp
+runtime/*.log
+runtime/heal_state.json
+runtime/context-doctor-config.json
