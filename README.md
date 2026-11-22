@@ -1,89 +1,107 @@
-# Antigravity Plugins Suite (`antigravity-plugins`)
+# Antigravity Plugins Suite
 
-面向 Google `Antigravity` 2.0 桌面应用的实用增强插件合集。所有插件采用**完全自包含、Shadow DOM 样式隔离、共用字节一致的宿主加载器（`pluginLoader.js`）以及 `SessionStart` 更新自动自愈**设计，既可全套一键安装，也可按目录独立选用并无缝共存。
+**English** | [简体中文](./README_zh.md)
+
+A curated suite of self-contained productivity and observability plugins for the **Google `Antigravity` 2.0** desktop application. All plugins share a byte-identical host loader (`scripts/pluginLoader.js`), isolate their UI inside `Shadow DOM`, and ship with `SessionStart` self-healing hooks (`hooks.json`) so they survive app updates and coexist seamlessly.
 
 > [!NOTE]
-> 简体中文汉化插件维护在独立仓库：[KiriuKazurei/antigravity-zh-cn-plugin](https://github.com/KiriuKazurei/antigravity-zh-cn-plugin)，与本仓库内全部插件共用同源宿主加载器，可无缝共存。
+> The Simplified Chinese UI localization plugin is maintained in a dedicated repository: [KiriuKazurei/antigravity-zh-cn-plugin](https://github.com/KiriuKazurei/antigravity-zh-cn-plugin). It uses the exact same host loader and coexists cleanly with all plugins in this repository.
 
 ---
 
-## 插件清单
+## Included Plugins
 
-| 子目录 | 插件名称 | 版本 | 核心能力 | 快捷键 / 入口 |
+| Directory | Plugin | Version | Summary | Entry / Shortcut |
 | :--- | :--- | :--- | :--- | :--- |
-| [`antigravity-context-doctor/`](./antigravity-context-doctor/README.md) | **上下文洞察与诊断面板** | `v1.0.0` | 融入原生右侧边栏顶部标签分页，实时可视化上下文窗口占用、内容构成拆解、上下文大户排行、文件活动追踪、Multi-Agent 编队、7 天跨会话洞察及一键生成无痛交接 Prompt | 右侧栏 `+ > 插件 > 上下文洞察` / `Alt+C` |
-| [`antigravity-usage-dashboard/`](./antigravity-usage-dashboard/README.md) | **模型 Usage 侧边栏仪表盘** | `v1.0.1` | 左侧边栏底部悬浮卡片，实时显示各模型配额池剩余百分比、重置倒计时、Credits 余额、当前轮次/会话 Token 消耗、TPS 与持久化历史统计 | 左侧边栏底部（`Settings` 上方） |
-| [`antigravity-snippets/`](./antigravity-snippets/README.md) | **高频 Prompt 模板库** | `v1.0.0` | 输入框 `#` 实时检索模板（标题/缩写优先），支持动态变量（`{{date}}` / `{{clipboard}}` / `{{selection}}`）、光标锚点 `{{$cursor}}` 与可视化模板管理 | 输入 `#` / `Alt+P` / 右下角胶囊 |
-| [`antigravity-notifier/`](./antigravity-notifier/README.md) | **任务通知与远程推送** | `v1.0.0` | 感知任务完成、等待授权、异常中断，支持桌面弹窗、Web Audio 合成提示音、后台标题闪烁及飞书/企业微信/Discord/Telegram Webhook 远程推送 | 左侧栏 `远程推送` / `Alt+N` |
+| [`antigravity-context-doctor/`](./antigravity-context-doctor/README.md) | **Context Doctor** | `v1.0.0` | Native right-pane tab for live context window gauge, composition breakdown, heavy-hitter step ranking, file activity, multi-agent fleet view, 7-day insights, and one-click session handoff prompt generation | Right Pane `+ > Plugins > Context Doctor` / `Alt+C` |
+| [`antigravity-usage-dashboard/`](./antigravity-usage-dashboard/README.md) | **Usage Dashboard** | `v1.0.1` | Floating card docked at the bottom of the left sidebar showing model quota pools, reset countdowns, Credits balance, per-turn/session token consumption, TPS, and persistent per-model history | Bottom of Left Sidebar (above `Settings`) |
+| [`antigravity-snippets/`](./antigravity-snippets/README.md) | **Prompt Snippets** | `v1.0.0` | Type `#` in the chat composer for instant template search with `title`/`alias` priority ranking, dynamic variables (`{{date}}`, `{{clipboard}}`, `{{selection}}`), `{{$cursor}}` placement, and a visual library manager | Type `#` / `Alt+P` / Bottom-right capsule |
+| [`antigravity-notifier/`](./antigravity-notifier/README.md) | **Task Notifier** | `v1.0.0` | Detects task completion, approval prompts, and errors; delivers desktop notifications, synthesized Web Audio chimes, background title flashing, and `Stop`-hook Webhook push (Feishu, WeCom, Discord, Telegram, Custom) | Left Sidebar `Remote Push` / `Alt+N` |
+
+### What Each Plugin Does
+
+- **[`antigravity-context-doctor`](./antigravity-context-doctor/README.md)** — Inspired by `dsh-context`, opens as a native tab right alongside `Review` and `Browser` in the right side pane. Helps you diagnose what is filling up your context window (`Cache Read` vs `New Input` vs `Output/Thinking`), spot oversized terminal logs or repeated file reads, browse 7-day cross-session token usage, and generate a structured handoff prompt straight into the chat input.
+- **[`antigravity-usage-dashboard`](./antigravity-usage-dashboard/README.md)** — Monitors `RetrieveUserQuotaSummary`, `GetUserStatus`, and `GetCascadeTrajectoryGeneratorMetadata` to display live shared quota pools, reset timers, and token/TPS metrics without leaving the main workspace, persisting history across restarts.
+- **[`antigravity-snippets`](./antigravity-snippets/README.md)** — Speeds up repetitive prompting with 8 built-in engineering templates, IME-friendly `#` inline autocomplete, `Tab` insertion without accidentally submitting, and import/export backups.
+- **[`antigravity-notifier`](./antigravity-notifier/README.md)** — Prevents missed approvals or silent stalls during long agent runs using dual RPC + DOM approval detection and background `Stop` hooks for CORS-free Webhook alerts.
 
 ---
 
-## 快速安装
+## Quick Install via Agent (Copy & Paste)
 
-### 环境要求
+Copy the prompt below and send it directly to your `Antigravity` Agent to download, verify, and install the plugins automatically:
+
+```text
+Please download and install the plugins from https://github.com/KiriuKazurei/antigravity-plugins.git into my Antigravity environment:
+1. Clone https://github.com/KiriuKazurei/antigravity-plugins.git to a temporary working directory.
+2. Run `python scripts/manage_plugins.py test` to verify loader consistency, Python syntax, and all unit tests.
+3. Run `python scripts/manage_plugins.py status` to check if `app.asar` already has the latest host loader.
+   - If the host loader is already up to date, run `python scripts/manage_plugins.py sync` and tell me to press Ctrl+R in Antigravity.
+   - If the host loader is missing or outdated, run `python scripts/manage_plugins.py stage` (or `install` if Antigravity is closed) and tell me what to restart to finish activation.
+4. Run `python scripts/manage_plugins.py status` again and summarize the installed plugins.
+```
+
+> [!TIP]
+> Want only specific plugins? Replace `sync` / `install` in the prompt with `--only antigravity-context-doctor,antigravity-usage-dashboard` (any comma-separated subset).
+
+---
+
+## Manual Installation & Management
+
+### Prerequisites
 
 - `Python 3`
-- `Node.js`（仅运行单元测试时需要）
-- `Git`（可选，也可直接下载 Release 压缩包）
+- `Git` (optional; you can also download a release archive)
+- `Node.js` (only needed to run unit tests)
 
-### 1. 一键安装全部插件
+### Install All or Selected Plugins
 
 ```powershell
 git clone https://github.com/KiriuKazurei/antigravity-plugins.git
 cd antigravity-plugins
 
-# 先完全退出 Antigravity 桌面端，然后执行安装
+# Close Antigravity completely before first-time host installation:
 python scripts/manage_plugins.py install
-```
 
-### 2. 按需安装指定插件
-
-```powershell
-# 示例：仅同步并安装上下文洞察与模板库
+# Or install only selected plugins:
 python scripts/manage_plugins.py install --only antigravity-context-doctor,antigravity-snippets
 ```
 
-> [!TIP]
-> 如果已接入过一次宿主加载器（`app.asar` 已启用 `pluginLoader.js`），后续更新或新增插件只需执行：
-> ```powershell
-> python scripts/manage_plugins.py sync
-> ```
-> 然后在 `Antigravity` 窗口内按 **`Ctrl+R`** 即可热生效，无需重启应用。
-> 若安装时 `Antigravity` 正在运行，脚本会自动生成 `app.asar.staged`，退出后再次运行 `install` 或在下次开启会话时由 `SessionStart` 自愈钩子自动完成替换。
-
----
-
-## 常用管理与校验命令
+### Common Commands
 
 ```powershell
-# 查看宿主状态、加载器一致性与各插件同步状态
+# Sync plugin script updates only (if host loader is already active, press Ctrl+R in Antigravity to hot-reload)
+python scripts/manage_plugins.py sync
+
+# Check host loader status, plugin versions, and sync state
 python scripts/manage_plugins.py status
 
-# 运行全套校验（pluginLoader.js 一致性 + py_compile + 各插件 Node.js 单元测试）
+# Run full checks (pluginLoader.js hash consistency + py_compile + Node.js unit tests)
 python scripts/manage_plugins.py test
 
-# 彻底还原官方原版 app.asar（需先完全退出 Antigravity）
+# Restore original unpatched app.asar (close Antigravity first)
 python scripts/manage_plugins.py restore
 ```
 
 ---
 
-## 仓库结构
+## Repository Structure
 
 ```text
 antigravity-plugins/
 ├── LICENSE
-├── README.md
+├── README.md                         # English overview & quick-install guide
+├── README_zh.md                      # 简体中文总览与快速安装指南
 ├── scripts/
-│   └── manage_plugins.py             # 多插件总控脚本（status/sync/install/stage/test/restore）
-├── antigravity-context-doctor/       # 上下文洞察与诊断面板
-├── antigravity-notifier/             # 任务通知与 Webhook 远程推送
-├── antigravity-snippets/             # # 触发 Prompt 模板库
-└── antigravity-usage-dashboard/      # 模型配额与 Token 用量仪表盘
+│   └── manage_plugins.py             # Multi-plugin manager (status/sync/install/stage/test/restore)
+├── antigravity-context-doctor/       # Context insights & handoff diagnostics
+├── antigravity-usage-dashboard/      # Sidebar model quota & token dashboard
+├── antigravity-snippets/             # #-triggered prompt template library
+└── antigravity-notifier/             # Task alerts & Webhook remote push
 ```
 
 ---
 
-## 开源协议
+## License
 
-本项目基于 [MIT License](./LICENSE) 开源。
+This project is licensed under the [MIT License](./LICENSE).

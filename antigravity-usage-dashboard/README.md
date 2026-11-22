@@ -23,12 +23,20 @@
 
 ## 快速安装与部署
 
-### 环境要求
+### 方式一：复制提示词让 Agent 自动安装
+
+```text
+请帮我下载并安装 https://github.com/KiriuKazurei/antigravity-plugins 仓库中的 antigravity-usage-dashboard 插件：先克隆仓库到临时目录，运行 python scripts/manage_plugins.py test 验证，再执行 python scripts/manage_plugins.py sync --only antigravity-usage-dashboard（如果宿主 app.asar 尚未接入 pluginLoader.js，请改用 install 或 stage 并提醒我退出后重启 Antigravity），最后用 status 确认安装结果。
+```
+
+### 方式二：命令行手动安装
+
+#### 环境要求
 
 - `Python 3`
 - `Git`（可选，也可直接下载仓库 ZIP 解压）
 
-### Windows (PowerShell)
+#### Windows (PowerShell)
 
 ```powershell
 # 1. 克隆插件合集仓库

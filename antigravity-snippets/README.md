@@ -24,31 +24,45 @@
 
 ## 快速安装与部署
 
-### Windows (PowerShell)
+### 方式一：复制提示词让 Agent 自动安装
+
+```text
+请帮我下载并安装 https://github.com/KiriuKazurei/antigravity-plugins 仓库中的 antigravity-snippets 插件：先克隆仓库到临时目录，运行 python scripts/manage_plugins.py test 验证，再执行 python scripts/manage_plugins.py sync --only antigravity-snippets（如果宿主 app.asar 尚未接入 pluginLoader.js，请改用 install 或 stage 并提醒我退出后重启 Antigravity），最后用 status 确认安装结果。
+```
+
+### 方式二：命令行手动安装（Windows PowerShell）
 
 ```powershell
-# 1. 克隆或复制到 Antigravity 插件目录
-# （如果你已安装 antigravity-zh-cn 或 antigravity-usage-dashboard，只需 sync 后在窗口内按 Ctrl+R 即可热生效！）
-python scripts/install_snippets.py sync
+git clone https://github.com/KiriuKazurei/antigravity-plugins.git
+cd antigravity-plugins
 
-# 如尚未接入过插件宿主，请完全退出 Antigravity 后执行一次安装：
-python scripts/install_snippets.py install
+# 首次接入宿主需先完全退出 Antigravity：
+python scripts/manage_plugins.py install --only antigravity-snippets
+
+# 若已接入过同源宿主（如 usage-dashboard / zh-cn），只需 sync 后在窗口内按 Ctrl+R 即可热生效：
+python scripts/manage_plugins.py sync --only antigravity-snippets
 ```
+
+## 用法速览
+
+- **快速唤出模板**：在对话输入框任意位置键入 `#`（如 `#cr`、`#bug`、`#ut`），使用 `↑` / `↓` 切换并用 `Tab` 插入（不会误触发送）。
+- **管理与收藏模板**：按 **`Alt+P`**（或 `Ctrl+Shift+;` / 点击右下角 `# 模板库` 胶囊）打开管理面板，支持一键把当前输入框内容收藏为新模板、置顶、编辑及 `JSON` 导入导出。
+- **变量与光标**：支持 `{{变量:默认值}}`、环境变量（`{{date}}`、`{{time}}`、`{{datetime}}`、`{{clipboard}}`、`{{selection}}`、`{{workspace}}`）以及光标锚点 `{{$cursor}}`。
 
 ### 常用管理命令
 
 ```powershell
 # 仅同步前端脚本更新（已接入宿主时，在窗口内按 Ctrl+R 即可热生效）
-python scripts/install_snippets.py sync
+python antigravity-snippets/scripts/install_snippets.py sync
 
 # 查看插件、宿主版本、备份与自愈状态
-python scripts/install_snippets.py status
+python antigravity-snippets/scripts/install_snippets.py status
 
 # 仅预构建 app.asar.staged，不立即替换
-python scripts/install_snippets.py stage
+python antigravity-snippets/scripts/install_snippets.py stage
 
 # 彻底还原官方原版 app.asar（需先完全退出 Antigravity）
-python scripts/install_snippets.py restore
+python antigravity-snippets/scripts/install_snippets.py restore
 ```
 
 ---
