@@ -41,6 +41,7 @@ Please download and install the plugins from https://github.com/KiriuKazurei/ant
    - If the host loader is already up to date, run `python scripts/manage_plugins.py sync` and tell me to press Ctrl+R in Antigravity.
    - If the host loader is missing or outdated, run `python scripts/manage_plugins.py stage` (or `install` if Antigravity is closed) and tell me what to restart to finish activation.
 4. Run `python scripts/manage_plugins.py status` again and summarize the installed plugins.
+5. Monitor the entire process end-to-end and directly troubleshoot/fix any installation, environment, or compatibility issues you encounter. If you run into a plugin bug or a new Antigravity version compatibility issue, please also open a GitHub Issue on https://github.com/KiriuKazurei/antigravity-plugins/issues (with OS, Antigravity version, reproduction steps, and sanitized error logs) to help the maintainer improve compatibility.
 ```
 
 > [!TIP]

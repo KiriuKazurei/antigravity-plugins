@@ -41,6 +41,7 @@
    - 如果已接入且为最新，执行 `python scripts/manage_plugins.py sync`，并提醒我在 Antigravity 窗口内按 Ctrl+R 热刷新生效。
    - 如果尚未接入或版本较旧，在 Antigravity 已退出时执行 `install`（若正在运行则先执行 `stage`），并告诉我需要重启 Antigravity 完成接入。
 4. 最后再执行一次 `python scripts/manage_plugins.py status` 向我汇报所有插件的安装状态。
+5. 全过程你盯着，遇到安装报错、环境差异或兼容性问题请直接排查并修复；如果确认属于插件 Bug 或新版 Antigravity 兼容性问题且有必要的话，请顺手给 https://github.com/KiriuKazurei/antigravity-plugins/issues 提交一个 GitHub Issue（附上操作系统、Antigravity 版本、复现步骤与脱敏后的错误日志），帮助项目持续优化兼容性。
 ```
 
 > [!TIP]

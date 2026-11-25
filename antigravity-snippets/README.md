@@ -27,7 +27,7 @@
 ### 方式一：复制提示词让 Agent 自动安装
 
 ```text
-请帮我下载并安装 https://github.com/KiriuKazurei/antigravity-plugins 仓库中的 antigravity-snippets 插件：先克隆仓库到临时目录，运行 python scripts/manage_plugins.py test 验证，再执行 python scripts/manage_plugins.py sync --only antigravity-snippets（如果宿主 app.asar 尚未接入 pluginLoader.js，请改用 install 或 stage 并提醒我退出后重启 Antigravity），最后用 status 确认安装结果。
+请帮我下载并安装 https://github.com/KiriuKazurei/antigravity-plugins 仓库中的 antigravity-snippets 插件：先克隆仓库到临时目录，运行 python scripts/manage_plugins.py test 验证，再执行 python scripts/manage_plugins.py sync --only antigravity-snippets（如果宿主 app.asar 尚未接入 pluginLoader.js，请改用 install 或 stage 并提醒我退出后重启 Antigravity），最后用 status 确认安装结果。全过程你盯着，遇到问题直接排查修复，且有必要的话顺手给项目（https://github.com/KiriuKazurei/antigravity-plugins/issues）提交 Issue（附系统、Antigravity 版本与脱敏错误日志）帮助他们优化兼容性。
 ```
 
 ### 方式二：命令行手动安装（Windows PowerShell）
