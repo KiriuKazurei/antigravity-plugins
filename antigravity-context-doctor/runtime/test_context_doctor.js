@@ -389,17 +389,24 @@ function makeFakeElement(tag) {
     querySelectorAll(sel) {
       const out = [];
       const stack = [...this.children];
+      const parts = sel.split(',').map((s) => s.trim()).filter(Boolean);
+      const tags = new Set(parts.map((s) => s.toUpperCase()));
       while (stack.length) {
         const cur = stack.shift();
         if (cur.nodeType === 1) {
-          if (
+          const matched =
+            tags.has(cur.tagName) ||
             (sel === 'input.input' && cur.tagName === 'INPUT') ||
-            (sel === '[data-agy-cd-menu-item="1"]' && cur.getAttribute('data-agy-cd-menu-item') === '1') ||
-            (sel === '[data-agy-cd-tab="1"]' && cur.getAttribute('data-agy-cd-tab') === '1') ||
+            (sel === '.sidebar' && String(cur.className).includes('sidebar')) ||
+            (sel.includes('[data-agy-cd-menu-item="1"]') && cur.getAttribute('data-agy-cd-menu-item') === '1') ||
+            (sel.includes('[data-agy-cd-tab="1"]') && cur.getAttribute('data-agy-cd-tab') === '1') ||
+            (sel.includes('[role="tab"]') && cur.getAttribute('role') === 'tab') ||
+            (sel.includes('[role="button"]') && cur.getAttribute('role') === 'button') ||
+            (sel.includes('[data-state]') && cur.getAttribute('data-state') !== null) ||
             (sel === '.agy-cd-menu-badge' && String(cur.className).includes('agy-cd-menu-badge')) ||
             (sel === '.agy-cd-aux-tab-lbl' && String(cur.className).includes('agy-cd-aux-tab-lbl')) ||
-            (sel === '.agy-cd-aux-tab-pct' && String(cur.className).includes('agy-cd-aux-tab-pct'))
-          ) {
+            (sel === '.agy-cd-aux-tab-pct' && String(cur.className).includes('agy-cd-aux-tab-pct'));
+          if (matched) {
             out.push(cur);
           }
           if (cur.children && cur.children.length) stack.push(...cur.children);
@@ -704,5 +711,68 @@ domApi.closeContextDoctor();
 assert.strictEqual(st.tabOpen, false);
 assert.strictEqual(st.prefs.open, false);
 assert.strictEqual(fakeDoc.querySelectorAll('[data-agy-cd-tab="1"]').length, 0);
+
+// 回归验证 4：右侧边栏仅打开浏览器动态网页标题标签页（无 role="tab"、无 placeholder 地址栏、纯 SVG + 按钮）时，仍须识别为原生标签页而非独立悬浮侧栏
+const prevChildren = fakeDoc.body.children.slice();
+fakeDoc.body.children = [hostEl];
+
+const splitRoot = makeFakeElement('div');
+splitRoot._rect = { left: 0, top: 0, right: 1280, bottom: 800, width: 1280, height: 800 };
+const chatPane = makeFakeElement('div');
+chatPane._rect = { left: 0, top: 0, right: 520, bottom: 800, width: 520, height: 800 };
+const composerEl = makeFakeElement('textarea');
+composerEl._rect = { left: 20, top: 700, right: 500, bottom: 780, width: 480, height: 80 };
+chatPane.appendChild(composerEl);
+
+const browserAuxPane = makeFakeElement('div');
+browserAuxPane._rect = { left: 520, top: 0, right: 1280, bottom: 800, width: 760, height: 800 };
+const browserTabStrip = makeFakeElement('div');
+browserTabStrip._rect = { left: 520, top: 4, right: 1260, bottom: 36, width: 740, height: 32 };
+const siteTab1 = makeFakeElement('button');
+siteTab1.textContent = '127.0.0.1:8768';
+siteTab1._rect = { left: 530, top: 6, right: 670, bottom: 34, width: 140, height: 28 };
+const siteTab2 = makeFakeElement('button');
+siteTab2.textContent = '拧螺丝页面';
+siteTab2._rect = { left: 676, top: 6, right: 796, bottom: 34, width: 120, height: 28 };
+const svgPlusBtn = makeFakeElement('button');
+svgPlusBtn.textContent = '';
+svgPlusBtn._rect = { left: 802, top: 8, right: 826, bottom: 32, width: 24, height: 24 };
+const plusSvg = makeFakeElement('svg');
+plusSvg.setAttribute('class', 'lucide lucide-plus');
+svgPlusBtn.appendChild(plusSvg);
+browserTabStrip.appendChild(siteTab1);
+browserTabStrip.appendChild(siteTab2);
+browserTabStrip.appendChild(svgPlusBtn);
+
+const urlBar = makeFakeElement('input');
+urlBar._rect = { left: 600, top: 44, right: 1220, bottom: 72, width: 620, height: 28 };
+urlBar.value = '127.0.0.1:8768';
+browserAuxPane.appendChild(browserTabStrip);
+browserAuxPane.appendChild(urlBar);
+
+splitRoot.appendChild(chatPane);
+splitRoot.appendChild(browserAuxPane);
+fakeDoc.body.appendChild(splitRoot);
+
+const browserAuxRect = domApi.locateNativeAuxPane();
+assert.strictEqual(browserAuxRect.found, true, 'must locate browser aux pane via URL value / composer split');
+assert.strictEqual(browserAuxRect.hasNativeTabStrip, true, 'must locate dynamic-title browser tab strip');
+assert.strictEqual(browserAuxRect.left, 520);
+assert.strictEqual(browserAuxRect.width, 760);
+assert(browserAuxRect.top >= 38, 'browser pane content must sit below dynamic tab strip');
+
+domApi.openContextDoctorInPane(false);
+assert.strictEqual(st.openedInNativePane, true, 'must dock into native browser pane instead of floating drawer');
+assert.strictEqual(st.tabOpen, true);
+const browserInjectedTabs = fakeDoc.querySelectorAll('[data-agy-cd-tab="1"]');
+assert.strictEqual(browserInjectedTabs.length, 1, 'must inject tab into dynamic browser tab strip');
+assert.strictEqual(browserTabStrip.children[2], browserInjectedTabs[0], 'injected tab must sit before SVG + button');
+assert(
+  hostEl.shadowRoot.querySelector('.sidebar').className.includes('docked-aux'),
+  'sidebar must use docked-aux class instead of floating overlay'
+);
+
+domApi.closeContextDoctor();
+fakeDoc.body.children = prevChildren;
 
 console.log('All antigravity-context-doctor tests passed!');
