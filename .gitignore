@@ -12,3 +12,9 @@ runtime/usage-history.json
 runtime/snippets.json
 runtime/notifier-config.json
 runtime/context-doctor-config.json
+runtime/kb-config.json
+runtime/notify.log
+
+# Standalone repositories & workspace-only wrappers
+antigravity-zh-cn/
+scripts/install_plugin.py

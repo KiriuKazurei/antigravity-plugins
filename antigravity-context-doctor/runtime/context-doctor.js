@@ -1956,7 +1956,7 @@
 
   function isOutsidePluginHosts(el) {
     if (!el || !el.closest) return true;
-    return !el.closest(`#${HOST_ID}, #agy-usage-dashboard-host, #agy-snippets-host, #agy-notifier-host`);
+    return !el.closest(`#${HOST_ID}, #agy-usage-dashboard-host, #agy-snippets-host, #agy-notifier-host, #agy-kb-host`);
   }
 
   function hasLeftSidebarAnchor(container) {
@@ -1989,7 +1989,7 @@
     for (let i = 0; i < btns.length; i++) {
       const b = btns[i];
       if (!isOutsidePluginHosts(b) || typeof b.getBoundingClientRect !== 'function') continue;
-      if (b.getAttribute && b.getAttribute('data-agy-cd-tab') === '1') continue;
+      if (b.getAttribute && (b.getAttribute('data-agy-cd-tab') === '1' || b.getAttribute('data-agy-kb-tab') === '1')) continue;
       const r = b.getBoundingClientRect();
       if (r.top < 0 || r.top > 48 || r.height < 16 || r.height > 44 || r.left < 28 || r.right > innerW - 60) {
         continue;
@@ -2021,7 +2021,7 @@
       const pBtns = tabAnchor.parentElement.querySelectorAll('button, [role="button"]');
       for (let i = 0; i < pBtns.length; i++) {
         const pb = pBtns[i];
-        if (pb === tabAnchor || (pb.getAttribute && pb.getAttribute('data-agy-cd-tab') === '1')) continue;
+        if (pb === tabAnchor || (pb.getAttribute && (pb.getAttribute('data-agy-cd-tab') === '1' || pb.getAttribute('data-agy-kb-tab') === '1'))) continue;
         const pr = pb.getBoundingClientRect();
         if (
           pr.left >= tr.right - 2 &&
@@ -2230,6 +2230,9 @@
           state.lastAuxRect = nextAux.found ? nextAux : null;
           state.tabOpen = true;
           state.prefs.open = true;
+          try {
+            window.dispatchEvent(new CustomEvent('agy-aux-plugin-activated', { detail: { id: 'antigravity-context-doctor' } }));
+          } catch (_) {}
           savePrefs(state.prefs);
           renderAll();
           refreshTargetSession(true);
@@ -2242,6 +2245,9 @@
     state.lastAuxRect = aux.found ? aux : null;
     state.tabOpen = true;
     state.prefs.open = true;
+    try {
+      window.dispatchEvent(new CustomEvent('agy-aux-plugin-activated', { detail: { id: 'antigravity-context-doctor' } }));
+    } catch (_) {}
     savePrefs(state.prefs);
     renderAll();
     refreshTargetSession(true);
@@ -2709,6 +2715,12 @@
       obs.observe(document.body, { childList: true, subtree: true });
     }
     window.addEventListener('resize', scheduleAuxSync);
+    window.addEventListener('agy-aux-plugin-activated', (ev) => {
+      const activeId = ev && ev.detail ? ev.detail.id : '';
+      if (activeId && activeId !== 'antigravity-context-doctor') {
+        switchAwayFromContextDoctor();
+      }
+    });
     // 如果用户在打开洞察分页时点击了原生顶部标签栏中的其它分页/「+」或功能项，切换离开（但保留分页标签）
     document.addEventListener(
       'click',

@@ -14,6 +14,7 @@ A curated suite of self-contained productivity and observability plugins for the
 | Directory | Plugin | Version | Summary | Entry / Shortcut |
 | :--- | :--- | :--- | :--- | :--- |
 | [`antigravity-context-doctor/`](./antigravity-context-doctor/README.md) | **Context Doctor** | `v1.0.0` | Native right-pane tab for live context window gauge, composition breakdown, heavy-hitter step ranking, file activity, multi-agent fleet view, 7-day insights, and one-click session handoff prompt generation | Right Pane `+ > Plugins > Context Doctor` / `Alt+C` |
+| [`antigravity-kb/`](./antigravity-kb/README.md) | **Markdown Knowledge Base** | `v1.0.0` | Local `.md` knowledge base in a native right-pane tab with live preview, `[[` quick note citation, one-click AI reply/code clipping, `[[backlinks]]` & `#tag` search, plus a built-in MCP server for AI retrieval and capture | Right Pane `+ > Plugins > Knowledge Base` / `[[` |
 | [`antigravity-usage-dashboard/`](./antigravity-usage-dashboard/README.md) | **Usage Dashboard** | `v1.0.1` | Floating card docked at the bottom of the left sidebar showing model quota pools, reset countdowns, Credits balance, per-turn/session token consumption, TPS, and persistent per-model history | Bottom of Left Sidebar (above `Settings`) |
 | [`antigravity-snippets/`](./antigravity-snippets/README.md) | **Prompt Snippets** | `v1.0.0` | Type `#` in the chat composer for instant template search with `title`/`alias` priority ranking, dynamic variables (`{{date}}`, `{{clipboard}}`, `{{selection}}`), `{{$cursor}}` placement, and a visual library manager | Type `#` / `Alt+P` / Bottom-right capsule |
 | [`antigravity-notifier/`](./antigravity-notifier/README.md) | **Task Notifier** | `v1.0.0` | Detects task completion, approval prompts, and errors; delivers desktop notifications, synthesized Web Audio chimes, background title flashing, and `Stop`-hook Webhook push (Feishu, WeCom, Discord, Telegram, Custom) | Left Sidebar `Remote Push` / `Alt+N` |
@@ -21,6 +22,7 @@ A curated suite of self-contained productivity and observability plugins for the
 ### What Each Plugin Does
 
 - **[`antigravity-context-doctor`](./antigravity-context-doctor/README.md)** — Inspired by `dsh-context`, opens as a native tab right alongside `Review` and `Browser` in the right side pane. Helps you diagnose what is filling up your context window (`Cache Read` vs `New Input` vs `Output/Thinking`), spot oversized terminal logs or repeated file reads, browse 7-day cross-session token usage, and generate a structured handoff prompt straight into the chat input.
+- **[`antigravity-kb`](./antigravity-kb/README.md)** — Local-first Markdown knowledge base embedded as a native right-pane tab with split edit/preview, `[[` inline citation autocomplete in the composer, one-click clipping of AI responses/code blocks, and a lightweight `MCP` server so the Agent can search and save notes directly.
 - **[`antigravity-usage-dashboard`](./antigravity-usage-dashboard/README.md)** — Monitors `RetrieveUserQuotaSummary`, `GetUserStatus`, and `GetCascadeTrajectoryGeneratorMetadata` to display live shared quota pools, reset timers, and token/TPS metrics without leaving the main workspace, persisting history across restarts.
 - **[`antigravity-snippets`](./antigravity-snippets/README.md)** — Speeds up repetitive prompting with 8 built-in engineering templates, IME-friendly `#` inline autocomplete, `Tab` insertion without accidentally submitting, and import/export backups.
 - **[`antigravity-notifier`](./antigravity-notifier/README.md)** — Prevents missed approvals or silent stalls during long agent runs using dual RPC + DOM approval detection and background `Stop` hooks for CORS-free Webhook alerts.
@@ -95,6 +97,7 @@ antigravity-plugins/
 ├── scripts/
 │   └── manage_plugins.py             # Multi-plugin manager (status/sync/install/stage/test/restore)
 ├── antigravity-context-doctor/       # Context insights & handoff diagnostics
+├── antigravity-kb/                   # Local Markdown knowledge base & MCP server
 ├── antigravity-usage-dashboard/      # Sidebar model quota & token dashboard
 ├── antigravity-snippets/             # #-triggered prompt template library
 └── antigravity-notifier/             # Task alerts & Webhook remote push

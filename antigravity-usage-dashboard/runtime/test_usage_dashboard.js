@@ -553,6 +553,71 @@ async function runAsyncRpcTests() {
   assert.strictEqual(hooks.pickActiveCascadeId(), '11111111-1111-1111-1111-111111111111');
   sandboxWindow.location = { pathname: '/c/22222222-2222-2222-2222-222222222222', search: '' };
   assert.strictEqual(hooks.pickActiveCascadeId(), '22222222-2222-2222-2222-222222222222');
+
+  // 10. Test v2.35+ WebSocket mode CSRF resolution from __APP_CONFIG__ and localStorage('agy_session_csrf_token')
+  delete hooks.state.capturedHeaders['x-codeium-ui-token'];
+  delete hooks.state.capturedHeaders['x-codeium-csrf-token'];
+  delete hooks.state.capturedHeaders['authorization'];
+  delete sandboxWindow.__AGY_CAPTURED_LS_HEADERS__;
+  sandboxWindow.localStorage.setItem('agy_session_csrf_token', 'ls-session-csrf');
+  sandboxWindow.__APP_CONFIG__ = { csrfToken: 'app-cfg-csrf-1' };
+  assert.strictEqual(hooks.hasAuthTokenCaptured(), true, 'must resolve CSRF from __APP_CONFIG__ without fetch tap');
+  assert.strictEqual(hooks.state.capturedHeaders['x-codeium-csrf-token'], 'app-cfg-csrf-1');
+
+  // If __APP_CONFIG__ is absent, fall back to agy_session_csrf_token in localStorage
+  delete hooks.state.capturedHeaders['x-codeium-csrf-token'];
+  delete sandboxWindow.__APP_CONFIG__;
+  assert.strictEqual(hooks.hasAuthTokenCaptured(), true, 'must fall back to localStorage agy_session_csrf_token');
+  assert.strictEqual(hooks.state.capturedHeaders['x-codeium-csrf-token'], 'ls-session-csrf');
+
+  // 11. Test stale CSRF retry via HTML page csrfToken refresh & unknown-field {} fallback
+  sandboxWindow.location = { href: 'https://127.0.0.1:34856/', pathname: '/', search: '' };
+  let sawFreshCsrf = false;
+  sandboxWindow.fetch = (url, init) => {
+    if (url === 'https://127.0.0.1:34856/') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('<script>window.__APP_CONFIG__={"csrfToken":"fresh-html-csrf"};</script>'),
+      });
+    }
+    const h = new Headers(init.headers);
+    if (h.get('x-codeium-csrf-token') !== 'fresh-html-csrf') {
+      return Promise.resolve({
+        ok: false,
+        status: 403,
+        text: () => Promise.resolve('invalid csrf token'),
+      });
+    }
+    sawFreshCsrf = true;
+    const body = JSON.parse(init.body || '{}');
+    if (body && typeof body.forceRefresh !== 'undefined') {
+      return Promise.resolve({
+        ok: false,
+        status: 400,
+        text: () => Promise.resolve('unknown field "forceRefresh"'),
+      });
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      json: () => Promise.resolve({ response: { groups: [{ groupId: 'g1' }] } }),
+    });
+  };
+  const quotaRetryResp = await hooks.callLsRpc('RetrieveUserQuotaSummary', { forceRefresh: false });
+  assert.strictEqual(sawFreshCsrf, true, 'must retry with refreshed CSRF token from HTML');
+  assert.deepStrictEqual(quotaRetryResp, { response: { groups: [{ groupId: 'g1' }] } });
+
+  // 12. Test WebSocket frame cascadeId extraction for StreamCascadeReactiveUpdates
+  const wsBytes = new Uint8Array(
+    Buffer.from('\x00\x00\x00/exa.language_server_pb.LanguageServerService/StreamCascadeReactiveUpdates\x12$33333333-3333-4333-8333-333333333333')
+  );
+  assert.strictEqual(
+    hooks.extractCascadeIdFromWsFrame(wsBytes),
+    '33333333-3333-4333-8333-333333333333',
+    'must extract cascadeId from StreamCascadeReactiveUpdates WebSocket frame'
+  );
 }
 
 let asyncTestsDone = false;

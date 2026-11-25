@@ -38,6 +38,7 @@ PRESERVE_RUNTIME_FILES = {
     "snippets.json",
     "notifier-config.json",
     "context-doctor-config.json",
+    "kb-config.json",
     "notify.log",
 }
 

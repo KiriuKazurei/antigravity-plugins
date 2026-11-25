@@ -1124,12 +1124,50 @@
     return headers;
   }
 
-  function hasAuthTokenCaptured() {
+  /**
+   * 从 Antigravity v2.35+ Hub UI 运行时状态读取 CSRF Token（WebSocket 模式下 fetch 不再触发拦截）。
+   */
+  function readHubCsrfFromEnv() {
+    try {
+      const appCfg = window.__APP_CONFIG__;
+      if (appCfg && typeof appCfg === 'object' && typeof appCfg.csrfToken === 'string' && appCfg.csrfToken) {
+        return appCfg.csrfToken;
+      }
+    } catch (_) {}
+    try {
+      if (window.localStorage && typeof window.localStorage.getItem === 'function') {
+        const stored = window.localStorage.getItem('agy_session_csrf_token');
+        if (stored && typeof stored === 'string') return stored;
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  function resolveHubAuthHeaders(forceRefresh) {
+    if (window.__AGY_CAPTURED_LS_HEADERS__) {
+      mergeCapturedHeaders(window.__AGY_CAPTURED_LS_HEADERS__);
+    }
+    const envCsrf = readHubCsrfFromEnv();
+    if (
+      envCsrf &&
+      (forceRefresh ||
+        (!state.capturedHeaders['x-codeium-ui-token'] &&
+          !state.capturedHeaders['x-codeium-csrf-token'] &&
+          !state.capturedHeaders['authorization']))
+    ) {
+      if (state.capturedHeaders['x-codeium-csrf-token'] !== envCsrf) {
+        state.capturedHeaders['x-codeium-csrf-token'] = envCsrf;
+      }
+    }
     return Boolean(
       state.capturedHeaders['x-codeium-ui-token'] ||
         state.capturedHeaders['x-codeium-csrf-token'] ||
         state.capturedHeaders['authorization']
     );
+  }
+
+  function hasAuthTokenCaptured() {
+    return resolveHubAuthHeaders(false);
   }
 
   function captureHeadersFromInit(init, input) {
@@ -1232,7 +1270,71 @@
     };
   }
 
+  const WS_CASCADE_PATTERN =
+    /GetCascadeTrajectorySteps|GetCascadeTrajectoryGeneratorMetadata|GetCascadeTrajectoryExecutorMetadatas|GetCascadeTrajectory|GetTrajectoryTurns|SendUserCascadeMessage|StreamCascadeReactiveUpdates|StreamUserTrajectoryReactiveUpdates/;
+  const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+  function toAsciiPreview(data, maxLen) {
+    if (!data) return '';
+    if (typeof data === 'string') return data;
+    try {
+      let bytes = null;
+      if (data instanceof ArrayBuffer) {
+        bytes = new Uint8Array(data, 0, Math.min(data.byteLength, maxLen || 512));
+      } else if (typeof Uint8Array !== 'undefined' && (data instanceof Uint8Array || ArrayBuffer.isView(data))) {
+        bytes = new Uint8Array(data.buffer, data.byteOffset, Math.min(data.byteLength, maxLen || 512));
+      }
+      if (!bytes) return '';
+      let txt = '';
+      for (let i = 0; i < bytes.length; i++) {
+        const ch = bytes[i];
+        txt += ch >= 32 && ch <= 126 ? String.fromCharCode(ch) : ' ';
+      }
+      return txt;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function extractCascadeIdFromWsData(data) {
+    const txt = toAsciiPreview(data, 768);
+    if (!txt || !WS_CASCADE_PATTERN.test(txt)) return '';
+    const m = txt.match(UUID_RE);
+    return m ? m[0] : '';
+  }
+
+  function installWebSocketCascadeHook() {
+    if (window.__AGY_WS_RPC_TAP__ || typeof window.WebSocket !== 'function' || !window.WebSocket.prototype) {
+      return;
+    }
+    const origSend = window.WebSocket.prototype.send;
+    if (typeof origSend !== 'function') return;
+    window.__AGY_WS_RPC_TAP__ = true;
+    window.WebSocket.prototype.send = function (data) {
+      try {
+        const url = typeof this.url === 'string' ? this.url : '';
+        if (!url || url.includes('connect-websocket')) {
+          const cid = extractCascadeIdFromWsData(data);
+          if (cid) {
+            const changed = cid !== state.activeCascadeId;
+            if (window.__AGY_CAPTURED_CASCADE_ID__ !== cid) {
+              window.__AGY_CAPTURED_CASCADE_ID__ = cid;
+            }
+            if (changed) {
+              state.activeCascadeId = cid;
+              setTimeout(() => refreshSessionMetricsOnly(), 80);
+            } else if (/SendUserCascadeMessage/.test(toAsciiPreview(data, 256))) {
+              setTimeout(() => refreshSessionMetricsOnly(), 600);
+            }
+          }
+        }
+      } catch (_) {}
+      return origSend.apply(this, arguments);
+    };
+  }
+
   function installFallbackHooks() {
+    installWebSocketCascadeHook();
     if (window.__AGY_EARLY_RPC_TAP__ || window.__AGY_USAGE_FETCH_HOOKED__) {
       return;
     }
@@ -1305,23 +1407,88 @@
     }
   }
 
-  async function callLsRpc(method, payload) {
-    if (window.__AGY_CAPTURED_LS_HEADERS__) {
-      mergeCapturedHeaders(window.__AGY_CAPTURED_LS_HEADERS__);
+  async function fetchCsrfTokenFromPage() {
+    try {
+      const href = window.location && typeof window.location.href === 'string' ? window.location.href : '';
+      if (!/^https?:/i.test(href) || typeof window.fetch !== 'function') return '';
+      const resp = await window.fetch(href, {
+        cache: 'no-store',
+        credentials: 'same-origin',
+        __agyInternal: true,
+      });
+      if (!resp || !resp.ok || typeof resp.text !== 'function') return '';
+      const html = await resp.text();
+      const match = html.match(/"?csrfToken"?\s*:\s*"([^"]+)"/);
+      if (match && match[1]) {
+        state.capturedHeaders['x-codeium-csrf-token'] = match[1];
+        try {
+          if (window.__APP_CONFIG__ && typeof window.__APP_CONFIG__ === 'object') {
+            window.__APP_CONFIG__.csrfToken = match[1];
+          }
+        } catch (_) {}
+        return match[1];
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  async function readErrorDetail(resp) {
+    try {
+      return (await resp.text()).trim();
+    } catch (_) {
+      return '';
     }
-    const headers = buildRpcHeaders(state.capturedHeaders);
-    const resp = await window.fetch(LS_SERVICE_PREFIX + method, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers,
-      body: JSON.stringify(payload || {}),
-      __agyInternal: true,
-    });
+  }
+
+  async function callLsRpc(method, payload) {
+    resolveHubAuthHeaders(false);
+    let bodyObj = payload || {};
+    let headers = buildRpcHeaders(state.capturedHeaders);
+    const sendPost = (reqHeaders, reqBody) =>
+      window.fetch(LS_SERVICE_PREFIX + method, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: reqHeaders,
+        body: JSON.stringify(reqBody),
+        __agyInternal: true,
+      });
+
+    let resp = await sendPost(headers, bodyObj);
+    let detail = resp.ok ? '' : await readErrorDetail(resp);
+
+    // 若因 WebSocket 迁移导致缓存的 CSRF Token 失效或未注入，则从运行时状态/页面刷新并重试一次
+    if (
+      !resp.ok &&
+      (resp.status === 401 || resp.status === 403 || (resp.status === 400 && /csrf|token|unauth/i.test(detail)))
+    ) {
+      const prevCsrf = headers['x-codeium-csrf-token'] || '';
+      resolveHubAuthHeaders(true);
+      if ((state.capturedHeaders['x-codeium-csrf-token'] || '') === prevCsrf) {
+        await fetchCsrfTokenFromPage();
+      }
+      const retryHeaders = buildRpcHeaders(state.capturedHeaders);
+      const nextCsrf = retryHeaders['x-codeium-csrf-token'] || '';
+      if (nextCsrf && nextCsrf !== prevCsrf) {
+        headers = retryHeaders;
+        resp = await sendPost(headers, bodyObj);
+        detail = resp.ok ? '' : await readErrorDetail(resp);
+      }
+    }
+
+    // 兼容部分版本对 RetrieveUserQuotaSummary / GetAvailableModels 严格校验未知字段
+    if (
+      !resp.ok &&
+      resp.status === 400 &&
+      Object.keys(bodyObj).length > 0 &&
+      (method === 'RetrieveUserQuotaSummary' || method === 'GetAvailableModels') &&
+      /unknown|field|forceRefresh|invalid_argument/i.test(detail)
+    ) {
+      bodyObj = {};
+      resp = await sendPost(headers, bodyObj);
+      detail = resp.ok ? '' : await readErrorDetail(resp);
+    }
+
     if (!resp.ok) {
-      let detail = '';
-      try {
-        detail = (await resp.text()).trim();
-      } catch (_) {}
       const err = new Error(detail ? `HTTP ${resp.status}: ${detail.slice(0, 80)}` : `HTTP ${resp.status}`);
       err.status = resp.status;
       err.detail = detail;
@@ -2852,9 +3019,43 @@
     });
   }
 
+  function installNavigationListeners() {
+    if (window.__AGY_USAGE_NAV_HOOKED__) return;
+    window.__AGY_USAGE_NAV_HOOKED__ = true;
+    const onRouteChange = () => {
+      const prev = state.activeCascadeId;
+      const next = pickActiveCascadeId();
+      if (next && next !== prev) {
+        setTimeout(() => refreshSessionMetricsOnly(), 80);
+      }
+      scheduleLayoutCheck();
+    };
+    window.addEventListener('popstate', onRouteChange, { passive: true });
+    window.addEventListener('hashchange', onRouteChange, { passive: true });
+    try {
+      if (window.history && typeof window.history.pushState === 'function') {
+        const origPush = window.history.pushState;
+        window.history.pushState = function () {
+          const ret = origPush.apply(this, arguments);
+          setTimeout(onRouteChange, 30);
+          return ret;
+        };
+      }
+      if (window.history && typeof window.history.replaceState === 'function') {
+        const origReplace = window.history.replaceState;
+        window.history.replaceState = function () {
+          const ret = origReplace.apply(this, arguments);
+          setTimeout(onRouteChange, 30);
+          return ret;
+        };
+      }
+    } catch (_) {}
+  }
+
   function start() {
     bootstrapFromEarlyTap();
     installFallbackHooks();
+    installNavigationListeners();
     scheduleLayoutCheck();
 
     if (typeof MutationObserver === 'function' && document.body) {
@@ -2917,6 +3118,9 @@
     filterVisibleEntries,
     mergeCapturedHeaders,
     buildRpcHeaders,
+    resolveHubAuthHeaders,
+    hasAuthTokenCaptured,
+    extractCascadeIdFromWsFrame: extractCascadeIdFromWsData,
     callLsRpc,
     refreshAllUsage,
     pickActiveCascadeId,
