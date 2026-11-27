@@ -1,0 +1,15 @@
+{
+  "name": "antigravity-context-menu",
+  "displayName": "Antigravity 右键菜单增强框架 (Context Menu)",
+  "version": "1.0.0",
+  "description": "面向 Antigravity 的可拓展右键菜单优化框架：智能识别对话与代码块中的本地路径并一键在资源管理器中定位/打开文件或终端，内置链接、代码块、选中文本工具与可视化自定义动作扩展面板。",
+  "author": "Antigravity Community",
+  "uiScripts": [
+    "runtime/context-menu.js"
+  ],
+  "suggestedPrompts": [
+    "帮我在右键菜单框架里新增一个自定义快捷动作",
+    "排查右键路径无法在资源管理器中打开的问题",
+    "查看当前右键菜单插件已启用的扩展模块"
+  ]
+}
