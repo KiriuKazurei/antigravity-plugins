@@ -7,6 +7,7 @@ Self-contained host manager for Antigravity UI plugins:
 - Zero-console-popup Windows background execution (CREATE_NO_WINDOW)
 """
 
+import base64
 import csv
 import hashlib
 import json
@@ -17,6 +18,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import threading
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -43,8 +45,13 @@ PLUGIN_LOADER_SRC = os.path.join(SCRIPT_DIR, "pluginLoader.js")
 HEAL_STATE_PATH = os.path.join(RUNTIME_DIR, "heal_state.json")
 HEAL_LOG_PATH = os.path.join(RUNTIME_DIR, "heal.log")
 PLUGINS_ROOT = os.path.join(os.path.expanduser("~"), ".gemini", "config", "plugins")
-GLOBAL_HEAL_PREF_PATH = os.path.join(PLUGINS_ROOT, ".agy-host-heal.json")
-GLOBAL_EXIT_WATCHER_LOCK = os.path.join(PLUGINS_ROOT, ".agy-exit-watcher.lock")
+KIRIU_BAK_FILENAME = "app.asar.kiriu.bak"
+KIRIU_STAGED_FILENAME = "app.asar.kiriu.staged"
+LEGACY_BAK_FILENAME = "app.asar.bak"
+GLOBAL_HEAL_PREF_PATH = os.path.join(PLUGINS_ROOT, ".kiriu.agy-host-heal.json")
+LEGACY_GLOBAL_HEAL_PREF_PATH = os.path.join(PLUGINS_ROOT, ".agy-host-heal.json")
+GLOBAL_EXIT_WATCHER_LOCK = os.path.join(PLUGINS_ROOT, ".kiriu.agy-exit-watcher.lock")
+GLOBAL_NOTICE_LOCK = os.path.join(PLUGINS_ROOT, ".kiriu.agy-notice.lock")
 
 HEAL_COOLDOWN_SEC = 180
 NOTICE_COOLDOWN_SEC = 1800
@@ -629,27 +636,32 @@ def get_paths(explicit_dir=None):
     return (
         res_dir,
         os.path.join(res_dir, "app.asar"),
-        os.path.join(res_dir, "app.asar.bak"),
-        os.path.join(res_dir, "app.asar.staged"),
+        os.path.join(res_dir, KIRIU_BAK_FILENAME),
+        os.path.join(res_dir, KIRIU_STAGED_FILENAME),
         os.path.join(res_dir, "i18n"),
     )
 
 
 def ensure_clean_backup(asar_path, bak_path, quiet=False):
+    """
+    Save an isolated backup (app.asar.kiriu.bak) only when current app.asar does not
+    contain our loader yet and backup is missing or from an older app version.
+    Never overwrites other developers' generic app.asar.bak, and never blocks
+    in-place incremental patching on top of third-party modifications.
+    """
     cur_ver = get_asar_version(asar_path)
-    is_clean_official = not has_plugin_loader(asar_path) and not has_legacy_preload_patch(asar_path)
-    if is_clean_official:
-        shutil.copy2(asar_path, bak_path)
-        if not quiet:
-            print(f"已基于当前官方原版 (v{cur_ver}) 更新备份: {bak_path}")
+    is_without_our_loader = not has_plugin_loader(asar_path) and not has_legacy_preload_patch(asar_path)
+    if is_without_our_loader:
+        bak_ver = get_asar_version(bak_path) if os.path.exists(bak_path) else None
+        if not os.path.exists(bak_path) or (cur_ver and bak_ver != cur_ver):
+            shutil.copy2(asar_path, bak_path)
+            if not quiet:
+                print(f"已基于当前版本 (v{cur_ver}) 更新独立备份: {bak_path}")
         return
-    if not os.path.exists(bak_path):
-        raise RuntimeError("找不到原版备份 app.asar.bak，且当前 app.asar 已被修改过。")
-    bak_ver = get_asar_version(bak_path)
-    if cur_ver and bak_ver and cur_ver != bak_ver:
-        raise RuntimeError(
-            f"备份版本 (v{bak_ver}) 与当前 app.asar 版本 (v{cur_ver}) 不匹配，已中止以防降级损坏。"
-        )
+    if os.path.exists(bak_path):
+        bak_ver = get_asar_version(bak_path)
+        if cur_ver and bak_ver and cur_ver != bak_ver and not quiet:
+            print(f"[提示] 独立备份版本 (v{bak_ver}) 与当前 app.asar (v{cur_ver}) 不同，将基于当前 app.asar 原地增量更新。")
 
 
 def sync_to_plugins_dir():
@@ -698,11 +710,68 @@ def _atomic_write_json(path, data):
 
 
 def load_global_heal_pref():
-    return read_json_safe(GLOBAL_HEAL_PREF_PATH, is_jsonc=False) or {}
+    data = read_json_safe(GLOBAL_HEAL_PREF_PATH, is_jsonc=False)
+    if isinstance(data, dict):
+        return data
+    legacy = read_json_safe(LEGACY_GLOBAL_HEAL_PREF_PATH, is_jsonc=False)
+    return legacy if isinstance(legacy, dict) else {}
 
 
 def save_global_heal_pref(pref):
     _atomic_write_json(GLOBAL_HEAL_PREF_PATH, pref)
+
+
+def record_patched_asar_state(asar_path, loader_ver_str=None):
+    """Record version and SHA-256 of app.asar right after our patch so we can
+    distinguish official Antigravity updates from same-version third-party rewrites."""
+    try:
+        if not os.path.exists(asar_path):
+            return
+        pref = load_global_heal_pref()
+        pref["last_patched_version"] = get_asar_version(asar_path) or ""
+        pref["last_patched_hash"] = file_sha256(asar_path)
+        pref["last_patched_ts"] = int(time.time())
+        if loader_ver_str:
+            pref["last_patched_loader"] = loader_ver_str
+        pref.pop("staged_base_hash", None)
+        pref.pop("staged_app_version", None)
+        save_global_heal_pref(pref)
+    except Exception:
+        pass
+
+
+def record_staged_base_state(asar_path):
+    """Remember the exact app.asar hash that app.asar.kiriu.staged was incrementally built on."""
+    try:
+        if not os.path.exists(asar_path):
+            return
+        pref = load_global_heal_pref()
+        pref["staged_base_hash"] = file_sha256(asar_path)
+        pref["staged_app_version"] = get_asar_version(asar_path) or ""
+        save_global_heal_pref(pref)
+    except Exception:
+        pass
+
+
+def detect_asar_change_kind(asar_path, up_reason):
+    """
+    Distinguish why patching is needed:
+    - 'loader_upgrade': our pluginLoader.js is present, just upgrading in place
+    - 'external_rewrite': Antigravity version unchanged since our last patch, but
+      app.asar hash changed and our loader vanished (another plugin/tool rewrote it)
+    - 'official_update': first install or Antigravity version changed
+    """
+    if up_reason in ("upgrade", "legacy_hash_diff"):
+        return "loader_upgrade"
+    if up_reason == "missing":
+        cur_ver = get_asar_version(asar_path) or ""
+        cur_hash = file_sha256(asar_path)
+        pref = load_global_heal_pref()
+        last_ver = pref.get("last_patched_version") or ""
+        last_hash = pref.get("last_patched_hash") or ""
+        if last_ver and cur_ver and cur_ver == last_ver and last_hash and cur_hash != last_hash:
+            return "external_rewrite"
+    return "official_update"
 
 
 def _get_heal_disable_state():
@@ -774,13 +843,13 @@ def cmd_status(explicit_dir=None):
         needs_up, up_reason = needs_loader_upgrade(asar_path)
         print(f"- app.asar 存在: {os.path.exists(asar_path)} (版本: {get_asar_version(asar_path)})")
         print(
-            f"- app.asar.bak 备份存在: {os.path.exists(bak_path)}"
+            f"- {KIRIU_BAK_FILENAME} 备份存在: {os.path.exists(bak_path)}"
             + (f" (版本: {get_asar_version(bak_path)})" if os.path.exists(bak_path) else "")
         )
         print(f"- app.asar 已安装宿主加载器: {has_plugin_loader(asar_path)} (版本: {format_loader_version(installed_ver) if installed_ver is not None else '未安装'})")
         print(f"- 需要升级宿主加载器: {needs_up} ({up_reason})")
         print(f"- app.asar 存在旧版失效注入: {has_legacy_preload_patch(asar_path)}")
-        print(f"- app.asar.staged 待应用包存在: {os.path.exists(staged_path)}")
+        print(f"- {KIRIU_STAGED_FILENAME} 待应用包存在: {os.path.exists(staged_path)}")
     print(f"- 宿主注入日志存在: {os.path.exists(os.path.join(RUNTIME_DIR, 'loader.log'))}")
     print(f"- 自愈日志存在: {os.path.exists(HEAL_LOG_PATH)}")
 
@@ -794,35 +863,56 @@ def cmd_install(stage_only=False, explicit_dir=None, do_sync=True):
         print("错误: 未找到 Antigravity 安装目录 (请用 --resources-dir 指定)")
         sys.exit(1)
 
+    if has_legacy_preload_patch(asar_path):
+        print("错误: 检测到旧版失效 preload 注入，请先执行 restore 恢复后再 install。")
+        sys.exit(1)
+
     ensure_clean_backup(asar_path, bak_path)
 
     if os.path.exists(legacy_dir):
         shutil.rmtree(legacy_dir, ignore_errors=True)
         print(f"已清理旧版外置目录: {legacy_dir}")
 
-    build_patched_asar(bak_path, staged_path)
-    print(f"已从原版备份生成插件宿主包 (v{get_asar_version(bak_path)}): {staged_path}")
+    # 始终基于当前 app.asar 原地增量构建，绝不覆盖其他开发者的补丁修改
+    build_patched_asar(asar_path, staged_path)
+    record_staged_base_state(asar_path)
+    cur_ver = get_asar_version(asar_path)
+    print(f"已基于当前 app.asar 原地增量生成插件宿主包 (v{cur_ver}): {staged_path}")
 
     if stage_only:
         return
 
     try:
         os.replace(staged_path, asar_path)
-        print("[成功] 宿主加载器已直接安装至 app.asar，启动 Antigravity 即可生效！")
+        record_patched_asar_state(asar_path, format_loader_version(get_local_loader_version()))
+        print("[成功] 宿主加载器已直接增量安装至 app.asar，启动 Antigravity 即可生效！")
     except PermissionError:
-        print("[就绪] app.asar 当前正被运行中的 Antigravity 占用，已生成 app.asar.staged 等待退出后替换。")
+        print(f"[就绪] app.asar 当前正被运行中的 Antigravity 占用，已生成 {KIRIU_STAGED_FILENAME} 等待退出后替换。")
 
 
 def cmd_restore(explicit_dir=None):
     res_dir, asar_path, bak_path, staged_path, _ = get_paths(explicit_dir)
-    if not res_dir or not os.path.exists(bak_path):
-        print("错误: 找不到原版备份 app.asar.bak")
+    if not res_dir:
+        print("错误: 未找到 Antigravity 安装目录")
         sys.exit(1)
+    restore_src = bak_path
+    if not os.path.exists(restore_src):
+        legacy_bak = os.path.join(res_dir, LEGACY_BAK_FILENAME)
+        if os.path.exists(legacy_bak):
+            restore_src = legacy_bak
+        else:
+            print(f"错误: 找不到原版备份 {KIRIU_BAK_FILENAME}（也未找到历史备份 {LEGACY_BAK_FILENAME}）")
+            sys.exit(1)
     try:
-        shutil.copy2(bak_path, asar_path)
+        shutil.copy2(restore_src, asar_path)
         if os.path.exists(staged_path):
             os.remove(staged_path)
-        print("[成功] 已从 app.asar.bak 恢复原版 app.asar。")
+        pref = load_global_heal_pref()
+        pref.pop("last_patched_version", None)
+        pref.pop("last_patched_hash", None)
+        pref.pop("staged_base_hash", None)
+        save_global_heal_pref(pref)
+        print(f"[成功] 已从 {os.path.basename(restore_src)} 恢复原版 app.asar。")
     except PermissionError:
         print("错误: app.asar 正在被运行中的 Antigravity 占用，请先完全退出 Antigravity 再重试。")
         sys.exit(1)
@@ -900,13 +990,64 @@ def _acquire_exit_watcher_lock(resources_dir):
     return False
 
 
+def _win_spawn_via_wmi(cmd_args):
+    """
+    Spawn a completely detached background process via Windows WMI
+    (Win32_Process.Create). Because WmiPrvSE.exe creates the process, it escapes
+    any restrictive parent Windows Job Object (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    without BREAKAWAY_OK) so it survives Antigravity / hook exit.
+    """
+    try:
+        cmd_line = subprocess.list2cmdline([str(a) for a in cmd_args])
+        ps_cmd_literal = "'" + cmd_line.replace("'", "''") + "'"
+        exe_base = os.path.basename(str(cmd_args[0])).lower() if cmd_args else ""
+        # pythonw.exe has no console window; avoid SW_HIDE so its tkinter popup is always visible
+        show_val = 5 if exe_base == "pythonw.exe" else 0
+        ps_script = (
+            "$si = New-CimInstance -ClassName Win32_ProcessStartup "
+            f"-Property @{{ShowWindow=[uint16]{show_val}}} -ClientOnly; "
+            f"$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+            f"-Arguments @{{CommandLine={ps_cmd_literal}; ProcessStartupInformation=$si}}; "
+            'Write-Output ("RC=" + $r.ReturnValue + " PID=" + $r.ProcessId)'
+        )
+        encoded = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=15,
+            creationflags=_win_no_window_flags(),
+        )
+        out = proc.stdout.decode("utf-8", errors="replace").strip()
+        return proc.returncode == 0 and "RC=0" in out
+    except Exception:
+        return False
+
+
 def _spawn_background_script(cmd_args):
     if platform.system() == "Windows":
+        if _win_spawn_via_wmi(cmd_args):
+            write_heal_log("Spawned background watcher via WMI (Win32_Process.Create).")
+            return
         CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         CREATE_NEW_PROCESS_GROUP = 0x00000200
+        CREATE_BREAKAWAY_FROM_JOB = 0x01000000
         flags = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+        try:
+            subprocess.Popen(
+                cmd_args,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                creationflags=flags | CREATE_BREAKAWAY_FROM_JOB,
+            )
+            write_heal_log("Spawned background watcher via CREATE_BREAKAWAY_FROM_JOB.")
+            return
+        except OSError:
+            pass
         bg_python = _win_background_python()
-        # Double-fork breaks parent-child PID link without opening any console window
+        # Fallback: double-fork breaks parent-child PID link without opening any console window
         launcher_code = (
             "import subprocess; "
             f"subprocess.Popen({cmd_args!r}, "
@@ -922,6 +1063,7 @@ def _spawn_background_script(cmd_args):
             creationflags=flags,
         )
         mid.wait(timeout=3)
+        write_heal_log("Spawned background watcher via double-fork fallback.")
     else:
         subprocess.Popen(
             cmd_args,
@@ -962,21 +1104,53 @@ def spawn_detached_healer(resources_dir, exe_path):
     _spawn_background_script(cmd_args)
 
 
+def _win_is_process_running_fast(exe_name):
+    """Fast (~15ms), zero-subprocess Windows process check via CreateToolhelp32Snapshot."""
+    import ctypes
+    from ctypes import wintypes
+
+    TH32CS_SNAPPROCESS = 0x00000002
+    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.POINTER(wintypes.ULONG)),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == INVALID_HANDLE_VALUE:
+        raise OSError(f"CreateToolhelp32Snapshot failed: {ctypes.get_last_error()}")
+    try:
+        pe = PROCESSENTRY32W()
+        pe.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        target = exe_name.lower()
+        if kernel32.Process32FirstW(snap, ctypes.byref(pe)):
+            while True:
+                if pe.szExeFile.lower() == target:
+                    return True
+                if not kernel32.Process32NextW(snap, ctypes.byref(pe)):
+                    break
+        return False
+    finally:
+        kernel32.CloseHandle(snap)
+
+
 def is_antigravity_running(default_on_error=True):
     system = platform.system()
     try:
         if system == "Windows":
-            out = subprocess.check_output(
-                ["tasklist", "/FI", "IMAGENAME eq Antigravity.exe", "/FO", "CSV", "/NH"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-                timeout=8,
-                creationflags=_win_no_window_flags(),
-            )
-            for row in csv.reader(out.splitlines()):
-                if len(row) >= 1 and row[0].strip().lower() == "antigravity.exe":
-                    return True
-            return False
+            return _win_is_process_running_fast("Antigravity.exe")
         if system == "Darwin":
             rc = subprocess.run(["pgrep", "-x", "Antigravity"], capture_output=True).returncode
             return rc == 0
@@ -1080,16 +1254,217 @@ def _swap_staged_asar(asar_path, staged_path, retries=25):
     return (False, last_err)
 
 
+def _show_fallback_result_popup(success, title, message):
+    """Fallback native OS dialog when tkinter is unavailable."""
+    system = platform.system()
+    try:
+        if system == "Windows":
+            import ctypes
+            # MB_OK (0x0) | MB_TOPMOST (0x40000) | MB_SETFOREGROUND (0x10000) | ICON
+            flags = 0x50000 | (0x40 if success else 0x10)
+            ctypes.windll.user32.MessageBoxW(0, str(message), str(title), flags)
+        elif system == "Darwin":
+            safe_msg = str(message).replace("\\", "\\\\").replace('"', '\\"')
+            safe_title = str(title).replace("\\", "\\\\").replace('"', '\\"')
+            subprocess.run(
+                ["osascript", "-e", f'display dialog "{safe_msg}" with title "{safe_title}" buttons {{"确定"}} default button "确定"'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+            )
+        else:
+            icon = "info" if success else "error"
+            if shutil.which("zenity"):
+                subprocess.run(
+                    ["zenity", f"--{icon}", f"--title={title}", f"--text={message}"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=30,
+                )
+            elif shutil.which("notify-send"):
+                subprocess.run(
+                    ["notify-send", str(title), str(message)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
+    except Exception:
+        pass
+
+
+def _run_swap_with_popup(resources_dir, asar_path, staged_path, app_ver, loader_ver_str, auto_relaunch=False, exe_path=None):
+    """
+    Display a clean topmost progress & result popup while applying app.asar.staged -> app.asar.
+    Returns (replaced: bool, err: Any, relaunched: bool).
+    """
+    title_text = "Antigravity 汉化插件自愈"
+    ver_label = f"v{app_ver}" if app_ver else "当前版本"
+    target_exe = exe_path or find_antigravity_exe(resources_dir)
+    result = {"replaced": False, "err": None, "relaunched": False}
+
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+
+        root = tk.Tk()
+        root.title(title_text)
+        root.resizable(False, False)
+        root.attributes("-topmost", True)
+
+        width, height = 430, 195
+        screen_w = root.winfo_screenwidth()
+        screen_h = root.winfo_screenheight()
+        pos_x = max(0, (screen_w - width) // 2)
+        pos_y = max(0, (screen_h - height) // 2)
+        root.geometry(f"{width}x{height}+{pos_x}+{pos_y}")
+        root.deiconify()
+        root.lift()
+        try:
+            root.focus_force()
+        except Exception:
+            pass
+
+        container = ttk.Frame(root, padding=(20, 16, 20, 16))
+        container.pack(fill="both", expand=True)
+
+        status_var = tk.StringVar(value="正在安装 Antigravity 插件宿主...")
+        detail_var = tk.StringVar(
+            value=f"正在为 Antigravity {ver_label} 覆盖更新 app.asar（宿主 {loader_ver_str}），\n请稍候（通常仅需 1~2 秒），期间请勿立即重新打开软件。"
+        )
+
+        status_lbl = tk.Label(
+            container,
+            textvariable=status_var,
+            font=("Microsoft YaHei UI", 11, "bold"),
+            anchor="w",
+            justify="left",
+        )
+        status_lbl.pack(fill="x", pady=(0, 8))
+
+        detail_lbl = tk.Label(
+            container,
+            textvariable=detail_var,
+            font=("Microsoft YaHei UI", 9),
+            anchor="w",
+            justify="left",
+            wraplength=385,
+        )
+        detail_lbl.pack(fill="x", pady=(0, 12))
+
+        pbar = ttk.Progressbar(container, mode="indeterminate", length=385)
+        pbar.pack(fill="x", pady=(0, 12))
+        pbar.start(12)
+
+        btn_frame = ttk.Frame(container)
+        btn_frame.pack(fill="x", side="bottom")
+
+        def close_window():
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+        def launch_and_close():
+            if target_exe and os.path.exists(target_exe):
+                relaunch_antigravity(target_exe)
+                result["relaunched"] = True
+            close_window()
+
+        def clear_buttons():
+            for child in btn_frame.winfo_children():
+                child.destroy()
+
+        def start_swap_worker():
+            clear_buttons()
+            status_lbl.config(fg="#1f2937")
+            status_var.set("正在安装 Antigravity 插件宿主...")
+            detail_var.set(
+                f"正在为 Antigravity {ver_label} 覆盖更新 app.asar（宿主 {loader_ver_str}），\n请稍候（通常仅需 1~2 秒），期间请勿立即重新打开软件。"
+            )
+            if not pbar.winfo_ismapped():
+                pbar.pack(fill="x", pady=(0, 12), before=btn_frame)
+            pbar.start(12)
+
+            def _worker():
+                replaced, err = _swap_staged_asar(asar_path, staged_path, retries=25)
+                result["replaced"] = replaced
+                result["err"] = err
+
+                def _on_done():
+                    try:
+                        pbar.stop()
+                        pbar.pack_forget()
+                    except Exception:
+                        pass
+                    clear_buttons()
+                    if replaced:
+                        status_lbl.config(fg="#15803d")
+                        status_var.set("✓ Antigravity 插件宿主安装成功！")
+                        if auto_relaunch and target_exe and os.path.exists(target_exe):
+                            detail_var.set(
+                                f"已成功更新 Antigravity {ver_label}（宿主 {loader_ver_str}），正在自动重新启动 Antigravity..."
+                            )
+                            ttk.Button(btn_frame, text="立即启动", command=launch_and_close).pack(side="right", padx=(6, 0))
+                            ttk.Button(btn_frame, text="关闭", command=close_window).pack(side="right")
+                            root.after(1500, launch_and_close)
+                        else:
+                            detail_var.set(
+                                f"已成功更新 Antigravity {ver_label}（宿主 {loader_ver_str}）。\n点击下方按钮或手动重新打开 Antigravity 即可恢复简体中文界面。"
+                            )
+                            ttk.Button(btn_frame, text="关闭", command=close_window).pack(side="right", padx=(6, 0))
+                            if target_exe and os.path.exists(target_exe):
+                                ttk.Button(btn_frame, text="立即启动 Antigravity", command=launch_and_close).pack(side="right")
+                    else:
+                        status_lbl.config(fg="#b91c1c")
+                        status_var.set("✕ Antigravity 插件宿主安装失败")
+                        detail_var.set(
+                            f"覆盖 app.asar 失败：{err}\n请确认 Antigravity 已完全退出（包括系统托盘），再点击「重试」。"
+                        )
+                        ttk.Button(btn_frame, text="关闭", command=close_window).pack(side="right", padx=(6, 0))
+                        ttk.Button(btn_frame, text="重试", command=start_swap_worker).pack(side="right")
+
+                try:
+                    root.after(0, _on_done)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        root.after(50, start_swap_worker)
+        root.mainloop()
+        return (result["replaced"], result["err"], result["relaunched"])
+    except Exception as ui_exc:
+        write_heal_log(f"Tkinter popup unavailable ({ui_exc}); falling back to native dialog.")
+        replaced, err = _swap_staged_asar(asar_path, staged_path, retries=25)
+        if replaced:
+            _show_fallback_result_popup(
+                True,
+                title_text,
+                f"已成功为 Antigravity {ver_label} 安装插件宿主（{loader_ver_str}）。\n现在可以重新打开 Antigravity 恢复全部插件。",
+            )
+            if auto_relaunch and target_exe and os.path.exists(target_exe):
+                relaunch_antigravity(target_exe)
+                return (True, None, True)
+            return (True, None, False)
+        _show_fallback_result_popup(
+            False,
+            title_text,
+            f"覆盖 app.asar 失败：{err}\n请确认 Antigravity 已完全退出（包括系统托盘）后重试。",
+        )
+        return (False, err, False)
+
+
 def cmd_apply_on_exit(resources_dir):
     """
     Non-disruptive exit watcher: waits silently until the user manually closes Antigravity,
-    then replaces app.asar with app.asar.staged. Never kills or restarts Antigravity.
+    then displays a progress/result popup while replacing app.asar with app.asar.staged.
+    Never kills Antigravity.
     """
     if not _acquire_exit_watcher_lock(resources_dir):
         return
 
     asar_path = os.path.join(resources_dir, "app.asar")
-    staged_path = os.path.join(resources_dir, "app.asar.staged")
+    staged_path = os.path.join(resources_dir, KIRIU_STAGED_FILENAME)
     write_heal_log(f"Exit watcher started (pid={os.getpid()}, resources_dir={resources_dir}). Waiting for manual exit...")
 
     deadline = time.time() + EXIT_WATCHER_MAX_SEC
@@ -1099,10 +1474,10 @@ def cmd_apply_on_exit(resources_dir):
                 write_heal_log("Exit watcher stopped: auto-heal disabled by user.")
                 return
             if not os.path.exists(staged_path):
-                write_heal_log("Exit watcher stopped: app.asar.staged no longer present.")
+                write_heal_log(f"Exit watcher stopped: {KIRIU_STAGED_FILENAME} no longer present.")
                 return
             if not is_antigravity_running(default_on_error=True):
-                time.sleep(1.0)
+                time.sleep(0.3)
                 if is_antigravity_running(default_on_error=True):
                     continue
                 if is_auto_heal_disabled() or not os.path.exists(staged_path):
@@ -1131,10 +1506,40 @@ def cmd_apply_on_exit(resources_dir):
                     except Exception:
                         pass
                     return
-                replaced, err = _swap_staged_asar(asar_path, staged_path, retries=20)
+                # TOCTOU 增量保护：若等待退出期间 app.asar 被其他插件改写，基于最新 app.asar 重新原地增量合并，绝不覆写对方修改
+                pref = load_global_heal_pref()
+                expected_base_hash = pref.get("staged_base_hash") or ""
+                active_hash = file_sha256(asar_path) if os.path.exists(asar_path) else ""
+                if expected_base_hash and active_hash and active_hash != expected_base_hash:
+                    try:
+                        write_heal_log(
+                            "Exit watcher detected concurrent third-party app.asar modification; rebuilding staged package incrementally on top of current app.asar."
+                        )
+                        build_patched_asar(asar_path, staged_path, quiet=True)
+                        record_staged_base_state(asar_path)
+                        staged_ver = get_installed_loader_version(staged_path) or staged_ver
+                    except Exception as rebuild_exc:
+                        write_heal_log(
+                            f"Exit watcher aborted incremental rebuild after external change: {rebuild_exc}"
+                        )
+                        try:
+                            os.remove(staged_path)
+                        except Exception:
+                            pass
+                        return
+                loader_ver_str = format_loader_version(staged_ver)
+                replaced, err, _ = _run_swap_with_popup(
+                    resources_dir,
+                    asar_path,
+                    staged_path,
+                    staged_app_ver or active_app_ver,
+                    loader_ver_str,
+                    auto_relaunch=False,
+                )
                 if replaced:
                     ver = get_asar_version(asar_path)
-                    write_heal_log(f"Successfully applied app.asar on manual exit (v{ver}, loader {format_loader_version(staged_ver)}).")
+                    write_heal_log(f"Successfully applied app.asar on manual exit (v{ver}, loader {loader_ver_str}).")
+                    record_patched_asar_state(asar_path, loader_ver_str)
                     state = load_heal_state()
                     state["last_success_ts"] = int(time.time())
                     state["last_success_version"] = ver
@@ -1145,8 +1550,10 @@ def cmd_apply_on_exit(resources_dir):
                     continue
                 write_heal_log(f"Failed to replace app.asar on manual exit: {err}")
                 return
-            time.sleep(2.0)
+            time.sleep(0.5)
         write_heal_log("Exit watcher timed out after 24h without Antigravity exit.")
+    except Exception as exc:
+        write_heal_log(f"Exit watcher unexpected error: {exc}")
     finally:
         try:
             lock_data = read_json_safe(GLOBAL_EXIT_WATCHER_LOCK, is_jsonc=False)
@@ -1160,29 +1567,42 @@ def cmd_apply_and_restart(resources_dir, exe_path=None):
     """Explicit manual restart command (never triggered automatically during work)."""
     write_heal_log(f"Manual apply-and-restart started (resources_dir={resources_dir}, exe={exe_path})")
     asar_path = os.path.join(resources_dir, "app.asar")
-    staged_path = os.path.join(resources_dir, "app.asar.staged")
+    staged_path = os.path.join(resources_dir, KIRIU_STAGED_FILENAME)
     if not os.path.exists(staged_path):
-        write_heal_log("Aborted: app.asar.staged missing.")
+        write_heal_log(f"Aborted: {KIRIU_STAGED_FILENAME} missing.")
         return
 
     time.sleep(1.0)
     polite_close_antigravity()
 
-    replaced, last_err = _swap_staged_asar(asar_path, staged_path, retries=25)
+    staged_app_ver = get_asar_version(staged_path) or get_asar_version(asar_path)
+    staged_ver = get_installed_loader_version(staged_path) or (0, 0, 0)
+    loader_ver_str = format_loader_version(staged_ver)
+    target_exe = exe_path or find_antigravity_exe(resources_dir)
+
+    replaced, last_err, relaunched = _run_swap_with_popup(
+        resources_dir,
+        asar_path,
+        staged_path,
+        staged_app_ver,
+        loader_ver_str,
+        auto_relaunch=True,
+        exe_path=target_exe,
+    )
     if not replaced:
         write_heal_log(f"Failed to replace app.asar: {last_err}")
         return
 
     ver = get_asar_version(asar_path)
     write_heal_log(f"Successfully patched app.asar (v{ver}).")
+    record_patched_asar_state(asar_path, loader_ver_str)
     state = load_heal_state()
     state["last_success_ts"] = int(time.time())
     state["last_success_version"] = ver
     save_heal_state(state)
 
-    if not exe_path:
-        exe_path = find_antigravity_exe(resources_dir)
-    relaunch_antigravity(exe_path)
+    if not relaunched:
+        relaunch_antigravity(target_exe)
 
 
 def make_user_notice(markdown):
@@ -1229,31 +1649,76 @@ def run_session_hook():
     installed_ver = get_installed_loader_version(asar_path)
     asar_hash = file_sha256(asar_path)
     loader_hash = file_sha256(PLUGIN_LOADER_SRC) if os.path.exists(PLUGIN_LOADER_SRC) else ""
-    heal_key = f"{asar_hash}:{loader_hash}"
+    change_kind = detect_asar_change_kind(asar_path, up_reason)
+    heal_key = f"{change_kind}:{asar_hash}:{loader_hash}"
     now = int(time.time())
 
-    # Pre-stage only if not already staged for the same app version with >= local loader version
+    # 防拉锯保护：同版本下 app.asar 被第三方插件或外部工具改写时，不静默覆写、不拉起 exit-watcher
+    if change_kind == "external_rewrite":
+        write_heal_log(
+            f"Detected same-version external rewrite of app.asar (v{cur_ver}, hash={asar_hash[:12]}); skipping auto-stage to avoid ping-pong with third-party plugins."
+        )
+        notice_lock = GLOBAL_NOTICE_LOCK
+        claimed_lock = False
+        try:
+            os.makedirs(PLUGINS_ROOT, exist_ok=True)
+            try:
+                fd = os.open(notice_lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.close(fd)
+                claimed_lock = True
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(notice_lock) > 15:
+                        os.remove(notice_lock)
+                except OSError:
+                    pass
+                return {}
+
+            pref = load_global_heal_pref()
+            if pref.get("last_notice_key") == heal_key and (now - pref.get("last_notice_ts", 0)) < NOTICE_COOLDOWN_SEC:
+                return {}
+            pref["last_notice_key"] = heal_key
+            pref["last_notice_ts"] = now
+            save_global_heal_pref(pref)
+        finally:
+            if claimed_lock:
+                try:
+                    os.remove(notice_lock)
+                except OSError:
+                    pass
+
+        return make_user_notice(
+            f"**[插件宿主外部改写提醒]** 检测到 **Antigravity** 版本未变化（`v{cur_ver}`），但 `app.asar` 已被其他插件或工具改写，导致当前插件加载器失效。\n\n"
+            f"为避免与第三方插件互相覆盖拉锯，已暂停自动自愈且未触碰任何文件。如需在**保留对方改动的基础上增量合并共存**，请手动运行：\n"
+            f"- `python \"{script_path}\" stage`（随后手动退出重启生效）或退出软件后运行 `python \"{script_path}\" install`。"
+        )
+
+    # Pre-stage only if not already staged for the same app version, same base hash, and >= local loader version
+    pref_snapshot = load_global_heal_pref()
     need_stage = True
     if os.path.exists(staged_path):
         staged_app_ver = get_asar_version(staged_path)
         staged_ver = get_installed_loader_version(staged_path) or (0, 0, 0)
         same_app_ver = bool(staged_app_ver and cur_ver != "unknown" and staged_app_ver == cur_ver)
-        if same_app_ver and staged_ver >= local_ver and local_ver > (0, 0, 0):
+        same_base_hash = pref_snapshot.get("staged_base_hash") == asar_hash
+        if same_app_ver and same_base_hash and staged_ver >= local_ver and local_ver > (0, 0, 0):
             need_stage = False
-        elif same_app_ver and time.time() - os.path.getmtime(staged_path) < 45 and staged_ver >= local_ver:
+        elif same_app_ver and same_base_hash and time.time() - os.path.getmtime(staged_path) < 45 and staged_ver >= local_ver:
             need_stage = False
 
     if need_stage:
         try:
             ensure_clean_backup(asar_path, bak_path, quiet=True)
-            build_patched_asar(bak_path, staged_path, quiet=True)
+            # 始终基于当前 app.asar 原地增量构建，保留任何第三方插件改动
+            build_patched_asar(asar_path, staged_path, quiet=True)
+            record_staged_base_state(asar_path)
             write_heal_log(
-                f"Pre-staged app.asar.staged for v{cur_ver} (loader {format_loader_version(installed_ver) if installed_ver is not None else 'none'} -> {format_loader_version(local_ver)}, reason={up_reason})"
+                f"Pre-staged {KIRIU_STAGED_FILENAME} incrementally for v{cur_ver} (kind={change_kind}, loader {format_loader_version(installed_ver) if installed_ver is not None else 'none'} -> {format_loader_version(local_ver)}, reason={up_reason})"
             )
         except Exception as exc:
             write_heal_log(f"Pre-stage failed for v{cur_ver}: {exc}")
             return make_user_notice(
-                f"检测到 **Antigravity**（`v{cur_ver}`）需要更新插件宿主，但预构建失败（未做任何中断操作，不影响正常使用）：`{exc}`"
+                f"检测到 **Antigravity**（`v{cur_ver}`）需要更新插件宿主，但增量预构建失败（未做任何中断操作，不影响正常使用）：`{exc}`"
             )
 
     # Start silent, non-disruptive exit watcher (never kills Antigravity)
@@ -1263,7 +1728,7 @@ def run_session_hook():
         write_heal_log(f"Failed to spawn exit watcher: {exc}")
 
     # Global notice cooldown with atomic short lock so concurrent hooks never spam duplicate notices
-    notice_lock = os.path.join(PLUGINS_ROOT, ".agy-notice.lock")
+    notice_lock = GLOBAL_NOTICE_LOCK
     claimed_lock = False
     try:
         os.makedirs(PLUGINS_ROOT, exist_ok=True)
@@ -1303,7 +1768,7 @@ def run_session_hook():
     )
     return make_user_notice(
         f"**[插件宿主更新提醒]** {reason_text}。\n\n"
-        f"补丁包 `app.asar.staged` 已安全预编译就绪，**不会强制关闭或打断你当前的工作**。请选择：\n"
+        f"增量补丁包 `{KIRIU_STAGED_FILENAME}` 已安全预编译就绪（基于当前 `app.asar` 原地增量构建，保留第三方插件改动，且**不会强制关闭或打断你当前的工作**）。请选择：\n"
         f"- **手动重启生效**：在你方便时手动完全退出 **Antigravity**，后台监听会在软件自然退出后静默完成替换，下次打开即生效；\n"
         f"- **暂时禁用提醒**：若当前不想更新，可运行 `python \"{script_path}\" disable-heal`（默认暂停 24 小时，加 `--permanent` 永久暂停，随时可用 `enable-heal` 恢复）。"
     )

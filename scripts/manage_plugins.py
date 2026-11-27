@@ -300,6 +300,16 @@ def cmd_test(plugins):
                 failed += 1
                 print(f"!!! 失败: {p['name']}/{t} (exit={proc.returncode})")
 
+    print("\n=== 4. 运行宿主防冲突与增量合并单元测试 ===")
+    coexist_test = os.path.join(SCRIPT_DIR, "test_plugin_host_coexistence.py")
+    if os.path.exists(coexist_test):
+        ran += 1
+        print(">>> 运行 scripts/test_plugin_host_coexistence.py")
+        proc = subprocess.run([sys.executable, coexist_test], cwd=WORKSPACE_DIR, check=False)
+        if proc.returncode != 0:
+            failed += 1
+            print(f"!!! 失败: scripts/test_plugin_host_coexistence.py (exit={proc.returncode})")
+
     print(f"\n=== 测试汇总: 共 {ran} 项，失败 {failed} 项 ===")
     return 0 if failed == 0 else 1
 
