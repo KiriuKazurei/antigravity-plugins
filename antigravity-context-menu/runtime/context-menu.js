@@ -486,6 +486,93 @@
     };
   }
 
+  // ==================== 原生菜单项转换与统一合并纯逻辑 ====================
+
+  function inferNativeItemMeta(item) {
+    const id = String(item && item.id || '').toLowerCase();
+    const lbl = String(item && item.label || '').toLowerCase();
+    const key = `${id} ${lbl}`;
+    const isDanger = /\b(delete|remove|trash|clear|kill|discard)\b|删除|移除|清空|丢弃|终止/.test(key);
+    let icon = 'none';
+    if (item && (item.type === 'checkbox' || item.type === 'radio')) {
+      icon = item.checked ? 'check' : 'empty';
+    } else if (isDanger) {
+      icon = 'trash';
+    } else if (/\b(rename|edit)\b|重命名|编辑/.test(key)) {
+      icon = 'edit';
+    } else if (/\b(pin|unpin)\b|置顶|固定/.test(key)) {
+      icon = 'pin';
+    } else if (/\b(star|unstar|favorite)\b|星标|收藏/.test(key)) {
+      icon = 'star';
+    } else if (/\b(archive|unarchive)\b|归档/.test(key)) {
+      icon = 'archive';
+    } else if (/\b(copy|duplicate)\b|复制/.test(key)) {
+      icon = 'copy';
+    } else if (/\b(cut)\b|剪切/.test(key)) {
+      icon = 'scissors';
+    } else if (/\b(paste)\b|粘贴/.test(key)) {
+      icon = 'clipboard';
+    } else if (/\b(new|add|create)\b|新建|添加/.test(key)) {
+      icon = 'plus';
+    } else if (/\b(open|reveal|show|finder|explorer)\b|打开|显示|定位/.test(key)) {
+      icon = 'external';
+    } else if (/\b(close)\b|关闭/.test(key)) {
+      icon = 'close';
+    }
+    return { icon, danger: isDanger };
+  }
+
+  function convertNativeMenuItems(nativeItems, onSelect, translateFn) {
+    if (!Array.isArray(nativeItems)) return [];
+    const out = [];
+    for (const item of nativeItems) {
+      if (!item || typeof item !== 'object') continue;
+      if (item.type === 'separator') {
+        out.push({ type: 'separator' });
+        continue;
+      }
+      const rawLabel = typeof item.label === 'string' ? item.label : '';
+      const label = typeof translateFn === 'function' ? translateFn(rawLabel) : rawLabel;
+      const meta = inferNativeItemMeta({ ...item, label });
+      if (item.type === 'submenu' || (Array.isArray(item.submenu) && item.submenu.length > 0)) {
+        out.push({
+          id: `native:${item.id || label}`,
+          nativeId: item.id,
+          label,
+          icon: meta.icon,
+          danger: meta.danger,
+          disabled: Boolean(item.disabled),
+          shortcut: item.accelerator || '',
+          submenu: convertNativeMenuItems(item.submenu || [], onSelect, translateFn),
+        });
+        continue;
+      }
+      out.push({
+        id: `native:${item.id || label}`,
+        nativeId: item.id,
+        label,
+        icon: meta.icon,
+        danger: meta.danger,
+        disabled: Boolean(item.disabled),
+        shortcut: item.accelerator || '',
+        onClick: () => {
+          if (typeof onSelect === 'function') onSelect(item.id);
+        },
+      });
+    }
+    return out;
+  }
+
+  function hasNativeCopyItem(nativeItems) {
+    if (!Array.isArray(nativeItems)) return false;
+    return nativeItems.some((it) => {
+      if (!it || it.type === 'separator') return false;
+      const id = String(it.id || '').toLowerCase();
+      const lbl = String(it.label || '').trim().toLowerCase();
+      return id === 'copy' || lbl === 'copy' || lbl === '复制';
+    });
+  }
+
   function renderActionTemplate(template, ctx) {
     if (typeof template !== 'string') return '';
     const sel = ctx.selectionText || '';
@@ -684,6 +771,8 @@
       extractBestPathFromText,
       stripShellPrompt,
       extractCommandFromText,
+      convertNativeMenuItems,
+      hasNativeCopyItem,
       renderActionTemplate,
       createMenuRegistry,
     };
@@ -1744,7 +1833,7 @@
     builtin: true,
     getItems(ctx) {
       const items = [];
-      if (ctx.copyableText) {
+      if (ctx.copyableText && !ctx.hasNativeCopy) {
         const copyLabel = ctx.selectionText
           ? '复制'
           : ctx.commandInfo
@@ -1999,6 +2088,16 @@
     spark: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v12M2 8h12M4 4l8 8M12 4 4 12"/></svg>',
     settings: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.25"/><path d="M8 1.75v1.5M8 12.75v1.5M1.75 8h1.5M12.75 8h1.5M3.6 3.6l1.05 1.05M11.35 11.35l1.05 1.05M12.4 3.6l-1.05 1.05M4.65 11.35 3.6 12.4"/></svg>',
     chevron: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 3.75 4.25 4.25L6 12.25"/></svg>',
+    check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m3.25 8.5 3 3 6.5-7"/></svg>',
+    trash: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.75 4.25h10.5"/><path d="M6 4.25V2.75a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5"/><path d="M4.25 4.25 5 13a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1l.75-8.75"/></svg>',
+    edit: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M11.2 2.4a1.4 1.4 0 0 1 2 2L5.6 12 2.5 13l1-3.1 7.7-7.5Z"/></svg>',
+    pin: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5 13.5 6.5 11 9l-1 3.5L6.5 9 3 12.5"/><path d="M6.5 9 3.5 6l3.5-1 2.5-2.5"/></svg>',
+    star: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m8 2 1.85 3.75 4.15.6-3 2.9.7 4.15L8 11.45 4.3 13.4l.7-4.15-3-2.9 4.15-.6L8 2Z"/></svg>',
+    archive: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.5" width="12" height="3" rx="1"/><path d="M3.25 5.5v7a1 1 0 0 0 1 1h7.5a1 1 0 0 0 1-1v-7"/><path d="M6.5 8.5h3"/></svg>',
+    plus: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>',
+    close: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m4 4 8 8M12 4 4 12"/></svg>',
+    empty: '',
+    none: '',
   };
 
   let shadowHost = null;
@@ -2227,6 +2326,13 @@
         }
         .item:hover, .item.active { background: var(--bg-hover); }
         .item.disabled { opacity: 0.42; cursor: not-allowed; }
+        .item.danger { color: var(--err); }
+        .item.danger .item-icon { color: var(--err); }
+        .item.danger:hover, .item.danger.active {
+          background: color-mix(in srgb, var(--err) 11%, transparent);
+          color: var(--err);
+        }
+        .item.danger:hover .item-icon, .item.danger.active .item-icon { color: var(--err); }
         .item-icon {
           width: 14px;
           height: 14px;
@@ -2470,11 +2576,9 @@
     el.style.top = `${top}px`;
   }
 
-  function renderContextMenu(ctx) {
+  function renderMenuItemsList(items, posX, posY, options = {}) {
     closeMenu();
     ensureShadowRoot();
-
-    const items = registry.buildMenuItems(ctx, { showToast, copyText, revealPathInExplorer, openPathWithDefaultApp });
     if (!items || items.length === 0) return false;
 
     const menuEl = document.createElement('div');
@@ -2491,6 +2595,7 @@
 
     const actionButtons = [];
     let headerBadgeEl = null;
+    const hasAnyIcon = items.some((it) => it && it.type !== 'separator' && it.type !== 'header' && it.icon && it.icon !== 'none');
 
     for (const item of items) {
       if (item.type === 'separator') {
@@ -2522,13 +2627,17 @@
 
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = `item${item.disabled ? ' disabled' : ''}`;
+      btn.className = `item${item.disabled ? ' disabled' : ''}${item.danger ? ' danger' : ''}`;
       btn.setAttribute('role', 'menuitem');
 
-      const iconSpan = document.createElement('span');
-      iconSpan.className = 'item-icon';
-      iconSpan.innerHTML = ICONS[item.icon] || ICONS.spark;
-      btn.appendChild(iconSpan);
+      if (hasAnyIcon) {
+        const iconSpan = document.createElement('span');
+        iconSpan.className = 'item-icon';
+        if (item.icon && item.icon !== 'none' && item.icon !== 'empty') {
+          iconSpan.innerHTML = ICONS[item.icon] || ICONS.spark;
+        }
+        btn.appendChild(iconSpan);
+      }
 
       const labelSpan = document.createElement('span');
       labelSpan.className = 'item-label';
@@ -2563,7 +2672,7 @@
             }
             const sbtn = document.createElement('button');
             sbtn.type = 'button';
-            sbtn.className = 'item';
+            sbtn.className = `item${subItem.disabled ? ' disabled' : ''}${subItem.danger ? ' danger' : ''}`;
             const sl = document.createElement('span');
             sl.className = 'item-label';
             sl.textContent = subItem.label || '';
@@ -2576,6 +2685,7 @@
             }
             sbtn.addEventListener('click', (e) => {
               e.stopPropagation();
+              if (subItem.disabled) return;
               closeMenu();
               try {
                 subItem.onClick && subItem.onClick();
@@ -2602,6 +2712,7 @@
         btn.addEventListener('mouseenter', openSub);
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
+          if (item.disabled) return;
           openSub();
         });
       } else {
@@ -2623,10 +2734,11 @@
     }
 
     menuContainer.appendChild(menuEl);
-    positionPopup(menuEl, ctx.clientX, ctx.clientY);
+    positionPopup(menuEl, posX, posY);
 
     // 异步校验本地路径存在性（不阻塞菜单弹出）
-    if (ctx.pathInfo && ctx.hasSysBridge && headerBadgeEl) {
+    const ctx = options.ctx || null;
+    if (ctx && ctx.pathInfo && ctx.hasSysBridge && headerBadgeEl) {
       callSysBridge('/sys/stat', { path: ctx.pathInfo.path }).then((info) => {
         if (!info || !headerBadgeEl || !headerBadgeEl.isConnected) return;
         if (info.exists) {
@@ -2679,9 +2791,19 @@
       window.removeEventListener('pointerdown', onOutsidePointer, true);
       window.removeEventListener('scroll', onBlur, true);
       window.removeEventListener('blur', onBlur);
+      if (typeof options.onDismiss === 'function') {
+        try {
+          options.onDismiss();
+        } catch (_) {}
+      }
     };
 
     return true;
+  }
+
+  function renderContextMenu(ctx) {
+    const items = registry.buildMenuItems(ctx, { showToast, copyText, revealPathInExplorer, openPathWithDefaultApp });
+    return renderMenuItemsList(items, ctx.clientX, ctx.clientY, { ctx });
   }
 
   // ==================== 设置与扩展管理面板 (Alt+M) ====================
@@ -2852,8 +2974,108 @@
     render();
   }
 
-  // ==================== 全局事件绑定与公开 API ====================
+  // ==================== 统一右键菜单接管与全局事件绑定 ====================
 
+  const hasUnifiedIpc = Boolean(sysBridge && sysBridge.unifiedContextMenu);
+  let lastPointerPos = { x: 120, y: 120 };
+  let lastCapturedCtx = null;
+  let lastCapturedTs = 0;
+
+  window.addEventListener(
+    'pointerdown',
+    (e) => {
+      lastPointerPos = { x: e.clientX, y: e.clientY };
+    },
+    true
+  );
+
+  function translateNativeLabel(label) {
+    if (!label || typeof label !== 'string') return '';
+    try {
+      const dict = window.__AGY_PLUGIN_I18N_DICT__;
+      if (dict && dict.exact && typeof dict.exact[label] === 'string') {
+        return dict.exact[label];
+      }
+    } catch (_) {}
+    return label;
+  }
+
+  // 供 pluginLoader v2.5.0 主进程 window:show-context-menu 桥接调用：
+  // 将左侧栏、标签页、主工作区的所有原生右键菜单统一渲染为插件风格，并按区域智能组合功能！
+  window.__AGY_SHOW_UNIFIED_CONTEXT_MENU__ = function (nativeItems) {
+    try {
+      const freshCtx = Date.now() - lastCapturedTs < 1500 ? lastCapturedCtx : null;
+      if (freshCtx && freshCtx.event && freshCtx.event.shiftKey) {
+        return '__FALLBACK_NATIVE__';
+      }
+      if (!Array.isArray(nativeItems) || nativeItems.length === 0) {
+        return null;
+      }
+
+      const posX = freshCtx ? freshCtx.clientX : lastPointerPos.x;
+      const posY = freshCtx ? freshCtx.clientY : lastPointerPos.y;
+
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (val) => {
+          if (!settled) {
+            settled = true;
+            resolve(val === undefined ? null : val);
+          }
+        };
+
+        const convertedNative = convertNativeMenuItems(
+          nativeItems,
+          (id) => finish(id),
+          translateNativeLabel
+        );
+
+        let finalItems = convertedNative;
+
+        // 分区展示策略：
+        // 1. 左侧栏 / 顶栏 / 终端等原生控件区：纯粹展示原本菜单的全部选项（统一插件 UI 风格）
+        // 2. 主工作区：原本菜单选项置顶，分隔线后无缝拼接本插件的扩展功能
+        const isPureNativeZone = Boolean(
+          !freshCtx ||
+          freshCtx.inLeftSidebar ||
+          (freshCtx.inInteractiveChrome && !freshCtx.pathInfo && !freshCtx.commandInfo && !freshCtx.inlineCodeText && !freshCtx.selectionText)
+        );
+
+        if (!isPureNativeZone && freshCtx) {
+          const mergedCtx = {
+            ...freshCtx,
+            hasNativeCopy: hasNativeCopyItem(nativeItems),
+          };
+          const extItems = registry.buildMenuItems(mergedCtx, {
+            showToast,
+            copyText,
+            revealPathInExplorer,
+            openPathWithDefaultApp,
+          });
+          if (extItems.length > 0) {
+            finalItems = [...convertedNative, { type: 'separator' }, ...extItems];
+          }
+        }
+
+        const shown = renderMenuItemsList(finalItems, posX, posY, {
+          ctx: isPureNativeZone ? null : freshCtx,
+          onDismiss: () => finish(null),
+        });
+        if (!shown) {
+          finish(null);
+        }
+      });
+    } catch (err) {
+      console.warn('[AgyContextMenu] unified show error:', err);
+      return '__FALLBACK_NATIVE__';
+    }
+  };
+
+  window.__AGY_CLOSE_UNIFIED_CONTEXT_MENU__ = function () {
+    closeMenu();
+  };
+
+  // 捕获阶段：记录最新右键上下文；未升级 v2.5.0 宿主时直接接管主工作区
   window.addEventListener(
     'contextmenu',
     (event) => {
@@ -2862,6 +3084,15 @@
           return;
         }
         const ctx = extractContextFromEvent(event);
+        lastCapturedCtx = ctx;
+        lastCapturedTs = Date.now();
+
+        if (hasUnifiedIpc) {
+          // v2.5.0 统一 IPC 模式：捕获阶段不阻断 React，让左侧栏和原生控件先调用 showContextMenu(items)
+          return;
+        }
+
+        // 兼容模式（尚未重启接入 v2.5.0 宿主）：左侧栏放行原生，主工作区接管
         if (!shouldTakeOverContextMenu(ctx)) {
           return;
         }
@@ -2871,10 +3102,35 @@
           event.stopImmediatePropagation();
         }
       } catch (err) {
-        console.warn('[AgyContextMenu] contextmenu error:', err);
+        console.warn('[AgyContextMenu] contextmenu capture error:', err);
       }
     },
     true
+  );
+
+  // 冒泡阶段（v2.5.0 统一模式）：若主工作区点击处 Antigravity 未触发原生菜单，则由插件直接弹出统一菜单
+  window.addEventListener(
+    'contextmenu',
+    (event) => {
+      if (!hasUnifiedIpc) return;
+      try {
+        if (event.defaultPrevented) return;
+        if (event.target && event.target.closest && event.target.closest(`#${HOST_ID}`)) {
+          return;
+        }
+        const ctx = lastCapturedCtx && Date.now() - lastCapturedTs < 200 ? lastCapturedCtx : extractContextFromEvent(event);
+        if (!shouldTakeOverContextMenu(ctx)) {
+          return;
+        }
+        const shown = renderContextMenu(ctx);
+        if (shown) {
+          event.preventDefault();
+        }
+      } catch (err) {
+        console.warn('[AgyContextMenu] contextmenu bubble error:', err);
+      }
+    },
+    false
   );
 
   window.addEventListener(

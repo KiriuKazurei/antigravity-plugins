@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const PLUGIN_LOADER_VERSION = "2.4.1";
+const PLUGIN_LOADER_VERSION = "2.5.0";
 exports.PLUGIN_LOADER_VERSION = PLUGIN_LOADER_VERSION;
 exports.attachWebContents = attachWebContents;
 exports.translateTrayItem = translateTrayItem;
@@ -1757,6 +1757,59 @@ const sysBridgeRuntime = {
     startPromise: null,
 };
 
+let contextMenuIpcHookInstalled = false;
+function installContextMenuIpcHook() {
+    if (contextMenuIpcHookInstalled) {
+        return;
+    }
+    if (!electron_1 || !electron_1.ipcMain || typeof electron_1.ipcMain.handle !== "function") {
+        return;
+    }
+    contextMenuIpcHookInstalled = true;
+    const origHandle = electron_1.ipcMain.handle.bind(electron_1.ipcMain);
+    electron_1.ipcMain.handle = function (channel, listener) {
+        if (channel === "window:show-context-menu" && typeof listener === "function") {
+            return origHandle(channel, async (event, items) => {
+                const sender = event && event.sender;
+                if (sender && !sender.isDestroyed?.() && Array.isArray(items) && items.length > 0) {
+                    const url = typeof sender.getURL === "function" ? sender.getURL() : "";
+                    if (isHubUiUrl(url)) {
+                        try {
+                            const result = await sender.executeJavaScript(
+                                `(function(){return typeof window.__AGY_SHOW_UNIFIED_CONTEXT_MENU__==='function'?window.__AGY_SHOW_UNIFIED_CONTEXT_MENU__(${JSON.stringify(items)}):'__FALLBACK_NATIVE__';})()`,
+                                true
+                            );
+                            if (result !== "__FALLBACK_NATIVE__") {
+                                return result === undefined ? null : result;
+                            }
+                        }
+                        catch {
+                            // Fall back cleanly to native Electron context menu
+                        }
+                    }
+                }
+                return listener(event, items);
+            });
+        }
+        if (channel === "window:close-context-menu" && typeof listener === "function") {
+            return origHandle(channel, (event, ...args) => {
+                const sender = event && event.sender;
+                if (sender && !sender.isDestroyed?.()) {
+                    void Promise.resolve(
+                        sender.executeJavaScript(
+                            "(function(){if(typeof window.__AGY_CLOSE_UNIFIED_CONTEXT_MENU__==='function')window.__AGY_CLOSE_UNIFIED_CONTEXT_MENU__();})()",
+                            true
+                        )
+                    ).catch(() => {});
+                }
+                return listener(event, ...args);
+            });
+        }
+        return origHandle(channel, listener);
+    };
+}
+installContextMenuIpcHook();
+
 function sendSysJson(res, status, payload, origin) {
     const headers = {
         "Content-Type": "application/json; charset=utf-8",
@@ -1929,6 +1982,7 @@ function ensureSysBridgeStarted(pluginPath) {
             platform: process.platform,
             homeDir: os.homedir(),
             pluginPath: sysBridgeRuntime.pluginPath || "",
+            unifiedContextMenu: true,
         });
     }
     if (sysBridgeRuntime.startPromise) {

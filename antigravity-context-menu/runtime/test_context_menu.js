@@ -223,4 +223,41 @@ test('extractCommandFromText: does not misclassify versions, filenames, shortcut
   assert.strictEqual(ctxMenu.extractCommandFromText('https://github.com/a/b'), null);
 });
 
+test('convertNativeMenuItems & hasNativeCopyItem: preserves native ids, submenus, icons and danger semantics', () => {
+  const clicked = [];
+  const native = [
+    { id: 'rename', label: 'Rename', accelerator: 'F2' },
+    { id: 'pin', label: 'Pin', type: 'checkbox', checked: true },
+    { type: 'separator' },
+    {
+      id: 'more',
+      label: 'More',
+      type: 'submenu',
+      submenu: [{ id: 'copy', label: 'Copy' }],
+    },
+    { id: 'delete', label: 'Delete' },
+  ];
+  const converted = ctxMenu.convertNativeMenuItems(
+    native,
+    (id) => clicked.push(id),
+    (lbl) => (lbl === 'Rename' ? '重命名' : lbl)
+  );
+  assert.strictEqual(converted.length, 5);
+  assert.strictEqual(converted[0].label, '重命名');
+  assert.strictEqual(converted[0].icon, 'edit');
+  assert.strictEqual(converted[0].shortcut, 'F2');
+  assert.strictEqual(converted[1].icon, 'check');
+  assert.strictEqual(converted[2].type, 'separator');
+  assert.strictEqual(converted[3].submenu[0].nativeId, 'copy');
+  assert.strictEqual(converted[4].danger, true);
+  assert.strictEqual(converted[4].icon, 'trash');
+
+  converted[0].onClick();
+  converted[3].submenu[0].onClick();
+  assert.deepStrictEqual(clicked, ['rename', 'copy']);
+
+  assert.strictEqual(ctxMenu.hasNativeCopyItem([{ id: 'copy', label: 'Copy' }]), true);
+  assert.strictEqual(ctxMenu.hasNativeCopyItem([{ id: 'rename', label: '重命名' }]), false);
+});
+
 console.log(`All ${passed} tests passed!`);
