@@ -519,7 +519,7 @@
       customActions: Array.isArray(initialConfig?.customActions) ? [...initialConfig.customActions] : [],
       prefs: {
         openFolderDirectly: true,
-        showPathPreview: true,
+        showPathPreview: false,
         enableOnInputs: true,
         ...(initialConfig?.prefs && typeof initialConfig.prefs === 'object' ? initialConfig.prefs : {}),
       },
@@ -730,7 +730,7 @@
       customActions: DEFAULT_CUSTOM_ACTIONS,
       prefs: {
         openFolderDirectly: true,
-        showPathPreview: true,
+        showPathPreview: false,
         enableOnInputs: true,
       },
     };
@@ -1424,10 +1424,16 @@
       linkText ||
       '';
 
-    // 6. 判断是否处于原生交互控件区（侧边栏会话列表、顶栏标签页等）
+    // 6. 精准识别左侧边栏、顶栏、终端与原生交互控件区（保护原生右键菜单不被覆盖）
+    const inLeftSidebar = isInLeftSidebar(target, event.clientX);
+    const inTopChrome = event.clientY < 44;
+    const inXterm = Boolean(target && target.closest('.xterm'));
     const inInteractiveChrome = Boolean(
-      target &&
-        target.closest('nav, aside, [role="tablist"], [role="tab"], [role="treeitem"], [role="menuitem"], header, button')
+      inLeftSidebar ||
+      inTopChrome ||
+      inXterm ||
+      (target &&
+        target.closest('nav, aside, [role="tablist"], [role="tab"], [role="treeitem"], [role="menuitem"], header, button'))
     );
 
     return {
@@ -1444,16 +1450,79 @@
       commandInfo,
       copyableText,
       pathInfo,
+      inLeftSidebar,
       inInteractiveChrome,
       platform: plat,
       hasSysBridge: Boolean(sysBridge),
     };
   }
 
+  function locateLeftSidebarContainer() {
+    const innerH = window.innerHeight || 800;
+    const composer = findChatInputElement();
+    const btns = document.querySelectorAll('button, a, [role="button"]');
+    let settingsBtn = null;
+    for (let i = 0; i < btns.length; i++) {
+      const b = btns[i];
+      if (!b || b.closest(`#${HOST_ID}`)) continue;
+      const txt = (b.textContent || '').trim();
+      const aria = (b.getAttribute('aria-label') || b.getAttribute('title') || '').trim();
+      if (/^(Settings|设置)$/i.test(txt || aria)) {
+        const r = b.getBoundingClientRect();
+        if (r.left >= 0 && r.left < 280 && r.bottom > innerH - 160 && r.width > 0) {
+          settingsBtn = b;
+          break;
+        }
+      }
+    }
+    if (settingsBtn) {
+      let cur = settingsBtn.parentElement;
+      let best = null;
+      for (let depth = 0; cur && cur !== document.body && cur !== document.documentElement && depth < 14; depth++) {
+        if (composer && cur.contains(composer)) break;
+        const r = cur.getBoundingClientRect();
+        if (r.left <= 16 && r.width >= 140 && r.width <= 460 && r.height >= innerH * 0.55) {
+          best = cur;
+        }
+        cur = cur.parentElement;
+      }
+      if (best) return best;
+    }
+    return null;
+  }
+
+  function isInLeftSidebar(target, clientX) {
+    if (!target) return false;
+    if (target.closest('aside, nav')) {
+      const box = target.closest('aside, nav');
+      const r = box.getBoundingClientRect();
+      if (r.left <= 24 && r.width <= 460) return true;
+    }
+    const sidebar = locateLeftSidebarContainer();
+    if (sidebar && sidebar.contains(target)) {
+      return true;
+    }
+    // 兜底：若存在主对话输入框且其左边缘明显偏右，则其左侧整列属于左侧边栏区域
+    const composer = findChatInputElement();
+    if (composer) {
+      const cr = composer.getBoundingClientRect();
+      if (cr.left >= 160 && clientX < cr.left - 12) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function shouldTakeOverContextMenu(ctx) {
     // 按住 Shift 始终放行原生菜单
     if (ctx.event.shiftKey) return false;
-    // 命中路径或 file:// 链接：必须接管！
+    // 左侧边栏（会话列表/工作区/导航等）始终保留 Antigravity 原生右键菜单，绝不覆盖！
+    if (ctx.inLeftSidebar) return false;
+    // 顶栏/标签页头/内置终端等原生功能区放行原生菜单
+    if (ctx.inInteractiveChrome && !ctx.pathInfo && !ctx.commandInfo && !ctx.inlineCodeText && !ctx.selectionText) {
+      return false;
+    }
+    // 命中路径或 file:// 链接
     if (ctx.pathInfo) return true;
     // 命中标蓝行内代码或终端命令
     if (ctx.inlineCodeText || ctx.commandInfo) return true;
@@ -1465,20 +1534,18 @@
     if (ctx.codeBlockText) return true;
     // 输入框（根据偏好）
     if (ctx.editable && registry.config.prefs.enableOnInputs !== false) return true;
-    // 侧边栏/标签栏等原生交互控件：未命中任何增强内容时放行原生菜单，保护原生功能
-    if (ctx.inInteractiveChrome) return false;
     // 其他正文区域接管
     return true;
   }
 
   // ==================== 注册内置扩展模块 ====================
 
-  // 模块 1：路径与资源管理器（首发核心）
+  // 模块 1：路径与资源管理器（位于原版基础编辑项之后）
   registry.registerModule({
     id: 'path-explorer',
     name: '路径识别与资源管理器直达',
     description: '自动识别对话与代码中的本地路径或 file:// 链接，一键在资源管理器中定位、直接打开文件、终端打开及多格式复制。',
-    priority: 10,
+    priority: 20,
     builtin: true,
     getItems(ctx) {
       if (!ctx.pathInfo) return [];
@@ -1487,7 +1554,7 @@
       const explorerName = isMac ? 'Finder' : '资源管理器';
       const items = [];
 
-      if (registry.config.prefs.showPathPreview !== false) {
+      if (registry.config.prefs.showPathPreview === true) {
         const lineTag = p.line ? `:${p.line}${p.endLine ? '-' + p.endLine : ''}` : '';
         items.push({
           type: 'header',
@@ -1565,18 +1632,18 @@
     },
   });
 
-  // 模块 1.5：标蓝行内代码与终端命令直输
+  // 模块 2：标蓝行内代码与终端命令直输
   registry.registerModule({
     id: 'terminal-command',
     name: '终端命令识别与快捷输入',
     description: '识别标蓝行内代码、代码块与选区中的可执行命令，一键快捷输入到内置终端或外部终端运行。',
-    priority: 15,
+    priority: 25,
     builtin: true,
     getItems(ctx) {
       const items = [];
       if (ctx.commandInfo) {
         const cmd = ctx.commandInfo;
-        if (!ctx.pathInfo && registry.config.prefs.showPathPreview !== false) {
+        if (!ctx.pathInfo && registry.config.prefs.showPathPreview === true) {
           const preview = cmd.command.replace(/\s+/g, ' ');
           items.push({
             type: 'header',
@@ -1613,7 +1680,7 @@
 
       // 非路径、非命令的标蓝行内代码（如 app.asar.staged、v2.4.0）
       if (ctx.inlineCodeText && !ctx.pathInfo) {
-        if (registry.config.prefs.showPathPreview !== false) {
+        if (registry.config.prefs.showPathPreview === true) {
           items.push({
             type: 'header',
             id: 'inline-code-header',
@@ -1633,12 +1700,12 @@
     },
   });
 
-  // 模块 2：网页链接增强
+  // 模块 3：网页链接增强
   registry.registerModule({
     id: 'link-actions',
     name: '网页链接操作',
     description: '右键 http/https 链接时支持在浏览器打开、复制地址及复制 Markdown 链接。',
-    priority: 20,
+    priority: 30,
     builtin: true,
     getItems(ctx) {
       if (!ctx.linkUrl) return [];
@@ -1668,12 +1735,12 @@
     },
   });
 
-  // 模块 3：基础编辑与代码块（继承原版右键菜单复制功能）
+  // 模块 0：原版基础编辑与代码块（置顶优先展示，复刻 Agy 原生菜单顺序）
   registry.registerModule({
     id: 'edit-basics',
     name: '基础编辑与代码块',
-    description: '继承原版复制功能，并提供剪切、粘贴、全选及一键复制整个代码块。',
-    priority: 30,
+    description: '置顶保留原版复制、剪切、粘贴、全选及一键复制整个代码块。',
+    priority: 10,
     builtin: true,
     getItems(ctx) {
       const items = [];
@@ -2070,8 +2137,8 @@
         .menu-layer { position: fixed; inset: 0; pointer-events: none; }
         .menu {
           position: fixed;
-          min-width: 212px;
-          max-width: 308px;
+          min-width: 192px;
+          max-width: 268px;
           padding: 4px;
           background: var(--bg);
           border: 1px solid var(--border);
@@ -2649,6 +2716,22 @@
               </div>
 
               <div>
+                <div class="sec-title">界面与行为偏好</div>
+                <div class="card-list">
+                  <div class="mod-row">
+                    <div class="mod-info">
+                      <div class="mod-name">显示顶部路径/命令预览头</div>
+                      <div class="mod-desc">默认关闭以保持 Antigravity 原生极简菜单布局；开启后在菜单顶部显示路径与实时状态徽章。</div>
+                    </div>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;flex-shrink:0;">
+                      <input type="checkbox" id="pref-show-header" ${registry.config.prefs.showPathPreview === true ? 'checked' : ''} />
+                      <span style="font-size:12px;">${registry.config.prefs.showPathPreview === true ? '开启' : '关闭'}</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div>
                 <div class="sec-title">已注册扩展模块 (${mods.length})</div>
                 <div class="card-list" id="mod-list"></div>
               </div>
@@ -2677,6 +2760,15 @@
           </div>
         </div>
       `;
+
+      const prefHeaderEl = modalContainer.querySelector('#pref-show-header');
+      if (prefHeaderEl) {
+        prefHeaderEl.addEventListener('change', (e) => {
+          registry.config.prefs.showPathPreview = Boolean(e.target.checked);
+          saveLocalConfig(registry.config);
+          render();
+        });
+      }
 
       const modList = modalContainer.querySelector('#mod-list');
       for (const m of mods) {
