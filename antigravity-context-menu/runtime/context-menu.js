@@ -1424,16 +1424,15 @@
       linkText ||
       '';
 
-    // 6. 精准识别左侧边栏、顶栏、终端与原生交互控件区（保护原生右键菜单不被覆盖）
-    const inLeftSidebar = isInLeftSidebar(target, event.clientX);
-    const inTopChrome = event.clientY < 44;
+    // 6. 精准识别左侧边栏、顶栏、终端与原生交互控件区（保护左侧栏原生菜单，不误伤主工作区）
+    const inLeftSidebar = isInLeftSidebar(target);
+    const inTopChrome = event.clientY < 42;
     const inXterm = Boolean(target && target.closest('.xterm'));
     const inInteractiveChrome = Boolean(
       inLeftSidebar ||
       inTopChrome ||
       inXterm ||
-      (target &&
-        target.closest('nav, aside, [role="tablist"], [role="tab"], [role="treeitem"], [role="menuitem"], header, button'))
+      (target && target.closest('[role="tablist"], [role="tab"], [role="treeitem"], [role="menuitem"], header'))
     );
 
     return {
@@ -1461,27 +1460,34 @@
     const innerH = window.innerHeight || 800;
     const composer = findChatInputElement();
     const btns = document.querySelectorAll('button, a, [role="button"]');
-    let settingsBtn = null;
+    let anchorBtn = null;
     for (let i = 0; i < btns.length; i++) {
       const b = btns[i];
       if (!b || b.closest(`#${HOST_ID}`)) continue;
       const txt = (b.textContent || '').trim();
       const aria = (b.getAttribute('aria-label') || b.getAttribute('title') || '').trim();
-      if (/^(Settings|设置)$/i.test(txt || aria)) {
+      const label = txt || aria;
+      if (/^(Settings|设置)$/i.test(label)) {
         const r = b.getBoundingClientRect();
-        if (r.left >= 0 && r.left < 280 && r.bottom > innerH - 160 && r.width > 0) {
-          settingsBtn = b;
+        if (r.left >= 0 && r.left < 280 && r.bottom > innerH - 180 && r.width > 0) {
+          anchorBtn = b;
           break;
         }
       }
+      if (!anchorBtn && /^(New Conversation|新建对话|Customizations|自定义|Inbox|收件箱)$/i.test(label)) {
+        const r = b.getBoundingClientRect();
+        if (r.left >= 0 && r.left < 260 && r.width > 0 && r.width < 320) {
+          anchorBtn = b;
+        }
+      }
     }
-    if (settingsBtn) {
-      let cur = settingsBtn.parentElement;
+    if (anchorBtn) {
+      let cur = anchorBtn.parentElement;
       let best = null;
       for (let depth = 0; cur && cur !== document.body && cur !== document.documentElement && depth < 14; depth++) {
         if (composer && cur.contains(composer)) break;
         const r = cur.getBoundingClientRect();
-        if (r.left <= 16 && r.width >= 140 && r.width <= 460 && r.height >= innerH * 0.55) {
+        if (r.left <= 16 && r.width >= 120 && r.width <= 420 && r.height >= innerH * 0.55) {
           best = cur;
         }
         cur = cur.parentElement;
@@ -1491,24 +1497,18 @@
     return null;
   }
 
-  function isInLeftSidebar(target, clientX) {
+  function isInLeftSidebar(target) {
     if (!target) return false;
-    if (target.closest('aside, nav')) {
-      const box = target.closest('aside, nav');
-      const r = box.getBoundingClientRect();
-      if (r.left <= 24 && r.width <= 460) return true;
+    const semantic = target.closest('aside, nav');
+    if (semantic) {
+      const r = semantic.getBoundingClientRect();
+      if (r.left <= 20 && r.width <= 420 && r.height >= (window.innerHeight || 800) * 0.4) {
+        return true;
+      }
     }
     const sidebar = locateLeftSidebarContainer();
     if (sidebar && sidebar.contains(target)) {
       return true;
-    }
-    // 兜底：若存在主对话输入框且其左边缘明显偏右，则其左侧整列属于左侧边栏区域
-    const composer = findChatInputElement();
-    if (composer) {
-      const cr = composer.getBoundingClientRect();
-      if (cr.left >= 160 && clientX < cr.left - 12) {
-        return true;
-      }
     }
     return false;
   }
