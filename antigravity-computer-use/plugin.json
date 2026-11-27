@@ -1,0 +1,13 @@
+{
+  "name": "antigravity-computer-use",
+  "displayName": "Antigravity 后台无干扰桌面操控 (Computer Use)",
+  "version": "1.0.0",
+  "description": "面向 Windows 的高性能原生 Rust 后台 Computer Use 插件：通过 WGC / PrintWindow 直接截取被遮挡或位于 Z-Order 底部的窗口，结合 UIA (AutoSetFocus=false) 与 PostMessageW 实现无焦点后台点击/输入/滚动，并配备独立透明穿透虚拟指针，全程不移动物理鼠标、不打断用户前台操作。",
+  "author": "Antigravity Community",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "列出当前桌面所有后台窗口，并截取底部某个窗口的画面",
+    "在不影响我当前操作的前提下，帮我后台操作指定窗口完成任务",
+    "查看目标后台窗口的 UI 控件树并点击指定按钮"
+  ]
+}

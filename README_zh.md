@@ -18,6 +18,7 @@
 | [`antigravity-usage-dashboard/`](./antigravity-usage-dashboard/README.md) | **模型 Usage 侧边栏仪表盘** | `v1.0.1` | 停靠在左侧边栏底部，实时显示模型配额池剩余百分比、重置倒计时、Credits 余额、当前轮次/会话 Token 消耗、TPS 与持久化历史统计 | 左侧边栏底部（`Settings` 上方） |
 | [`antigravity-snippets/`](./antigravity-snippets/README.md) | **高频 Prompt 模板库** | `v1.0.0` | 在对话框输入 `#` 实时检索模板（标题/缩写优先），支持动态变量（`{{date}}`、`{{clipboard}}`、`{{selection}}`）、光标锚点 `{{$cursor}}` 与可视化模板管理 | 输入 `#` / `Alt+P` / 右下角胶囊 |
 | [`antigravity-notifier/`](./antigravity-notifier/README.md) | **任务通知与远程推送** | `v1.0.0` | 感知任务完成、等待授权、异常中断，支持桌面弹窗、Web Audio 合成提示音、后台标题闪烁与飞书 / 企业微信 / Discord / Telegram / 自定义 Webhook 远程推送 | 左侧栏 `远程推送` / `Alt+N` |
+| [`antigravity-computer-use/`](./antigravity-computer-use/README.md) | **后台无干扰桌面操控 (Computer Use)** | `v1.0.0` | 面向 Windows 的原生 Rust `MCP` 后台桌面操作插件：支持底部/被遮挡窗口 WGC 极速截屏、UIA (`AutoSetFocus=false`) 与 `PostMessageW` 无焦点交互、空闲自动淡出回收的独立透明虚拟指针，以及带急停按钮的全屏兜底模式 | `python antigravity-computer-use/scripts/install.py`（15 个 MCP 工具） |
 
 ### 各插件详细定位
 
@@ -26,6 +27,7 @@
 - **[`antigravity-usage-dashboard`](./antigravity-usage-dashboard/README.md)** — 在左侧边栏实时观测各模型共享配额池剩余量、重置倒计时、Credits 与历史消耗统计，重启后历史数据不丢失。
 - **[`antigravity-snippets`](./antigravity-snippets/README.md)** — 内置 8 套高频研发模板，兼容中文输入法 `#` 检索、`Tab` 直接插入且不误触发送，支持一键收藏当前输入内容与 `JSON` 导入导出。
 - **[`antigravity-notifier`](./antigravity-notifier/README.md)** — 通过 RPC 状态与审批按钮组双通道防误报识别，长任务跑完或卡在审批确认时第一时间通过本地弹窗/音效或 `Stop` Hook Webhook 通知你。
+- **[`antigravity-computer-use`](./antigravity-computer-use/README.md)** — 原生 Rust 编写的 Windows 后台 Computer Use 插件：不抢占前台焦点、不移动物理鼠标，支持对被遮挡窗口直接截屏与点击/输入/滚动，虚拟指针操作结束后自动平滑淡出回收，并自动注册 15 个可独立开关的全局 `MCP` 工具。
 
 ---
 
@@ -101,7 +103,8 @@ antigravity-plugins/
 ├── antigravity-kb/                   # 轻量化 Markdown 知识库与 MCP 服务
 ├── antigravity-usage-dashboard/      # 模型配额与 Token 用量仪表盘
 ├── antigravity-snippets/             # # 触发 Prompt 模板库
-└── antigravity-notifier/             # 任务通知与 Webhook 远程推送
+├── antigravity-notifier/             # 任务通知与 Webhook 远程推送
+└── antigravity-computer-use/         # Windows 后台无干扰桌面操控（Rust MCP）
 ```
 
 ---

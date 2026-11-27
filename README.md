@@ -18,6 +18,7 @@ A curated suite of self-contained productivity and observability plugins for the
 | [`antigravity-usage-dashboard/`](./antigravity-usage-dashboard/README.md) | **Usage Dashboard** | `v1.0.1` | Floating card docked at the bottom of the left sidebar showing model quota pools, reset countdowns, Credits balance, per-turn/session token consumption, TPS, and persistent per-model history | Bottom of Left Sidebar (above `Settings`) |
 | [`antigravity-snippets/`](./antigravity-snippets/README.md) | **Prompt Snippets** | `v1.0.0` | Type `#` in the chat composer for instant template search with `title`/`alias` priority ranking, dynamic variables (`{{date}}`, `{{clipboard}}`, `{{selection}}`), `{{$cursor}}` placement, and a visual library manager | Type `#` / `Alt+P` / Bottom-right capsule |
 | [`antigravity-notifier/`](./antigravity-notifier/README.md) | **Task Notifier** | `v1.0.0` | Detects task completion, approval prompts, and errors; delivers desktop notifications, synthesized Web Audio chimes, background title flashing, and `Stop`-hook Webhook push (Feishu, WeCom, Discord, Telegram, Custom) | Left Sidebar `Remote Push` / `Alt+N` |
+| [`antigravity-computer-use/`](./antigravity-computer-use/README.md) | **Background Computer Use (Windows)** | `v1.0.0` | Native Rust MCP server for non-intrusive Windows background desktop automation: occluded/bottom Z-order capture (WGC / `PrintWindow`), UIA (`AutoSetFocus=false`) + `PostMessageW` input, independent auto-fading virtual cursor, and emergency-stop full-screen fallback | `python antigravity-computer-use/scripts/install.py` (15 MCP tools) |
 
 ### What Each Plugin Does
 
@@ -26,6 +27,7 @@ A curated suite of self-contained productivity and observability plugins for the
 - **[`antigravity-usage-dashboard`](./antigravity-usage-dashboard/README.md)** — Monitors `RetrieveUserQuotaSummary`, `GetUserStatus`, and `GetCascadeTrajectoryGeneratorMetadata` to display live shared quota pools, reset timers, and token/TPS metrics without leaving the main workspace, persisting history across restarts.
 - **[`antigravity-snippets`](./antigravity-snippets/README.md)** — Speeds up repetitive prompting with 8 built-in engineering templates, IME-friendly `#` inline autocomplete, `Tab` insertion without accidentally submitting, and import/export backups.
 - **[`antigravity-notifier`](./antigravity-notifier/README.md)** — Prevents missed approvals or silent stalls during long agent runs using dual RPC + DOM approval detection and background `Stop` hooks for CORS-free Webhook alerts.
+- **[`antigravity-computer-use`](./antigravity-computer-use/README.md)** — Native Rust Windows MCP plugin for zero-interference background GUI automation: captures occluded windows without raising them, renders an independent click-through virtual cursor that auto-fades after idle, and registers 15 individually toggleable MCP tools (including an emergency-stop full-screen control fallback).
 
 ---
 
@@ -101,7 +103,8 @@ antigravity-plugins/
 ├── antigravity-kb/                   # Local Markdown knowledge base & MCP server
 ├── antigravity-usage-dashboard/      # Sidebar model quota & token dashboard
 ├── antigravity-snippets/             # #-triggered prompt template library
-└── antigravity-notifier/             # Task alerts & Webhook remote push
+├── antigravity-notifier/             # Task alerts & Webhook remote push
+└── antigravity-computer-use/         # Windows background Computer Use (Rust MCP)
 ```
 
 ---
