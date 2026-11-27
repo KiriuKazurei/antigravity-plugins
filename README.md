@@ -70,6 +70,9 @@ python scripts/manage_plugins.py install
 
 # Or install only selected plugins:
 python scripts/manage_plugins.py install --only antigravity-context-doctor,antigravity-snippets
+
+# Install Windows Background Computer Use plugin separately (no app.asar patch needed; registers 15 global MCP tools):
+python antigravity-computer-use/scripts/install.py
 ```
 
 ### Common Commands

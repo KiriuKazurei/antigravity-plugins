@@ -70,6 +70,9 @@ python scripts/manage_plugins.py install
 
 # 或仅安装指定插件：
 python scripts/manage_plugins.py install --only antigravity-context-doctor,antigravity-snippets
+
+# 单独安装 Windows 后台 Computer Use 插件（无需修改 app.asar，自动注册 15 个全局可开关 MCP 工具）：
+python antigravity-computer-use/scripts/install.py
 ```
 
 ### 日常管理命令

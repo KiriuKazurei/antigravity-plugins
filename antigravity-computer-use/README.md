@@ -5,7 +5,7 @@
 ## 核心特性
 
 - **底部 / 被遮挡窗口极速截屏（<30ms）**：优先通过 `Windows.Graphics.Capture (WGC)` + Direct3D 11 从 DWM GPU 合成树直接捕获目标窗口，自动以 `PrintWindow(PW_RENDERFULLCONTENT)` 兜底。只要窗口未最小化到任务栏，即使完全被其他窗口遮挡在 Z-Order 底部也能高清截屏，**绝不置顶窗口**。
-- **Agent 独立虚拟鼠标指针**：内置独立虚拟光标状态机，并渲染极轻量的透明点击穿透悬浮层（`WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE`），带平滑移动与点击波纹。**全程绝不调用 `SetCursorPos` 或 `SendInput`**，不移动你的物理鼠标，也不拦截你的任何点击。
+- **Agent 独立虚拟鼠标指针（支持空闲自动回收）**：内置独立虚拟光标状态机，并渲染极轻量的透明点击穿透悬浮层（`WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE`），带平滑移动与点击波纹；操作结束后静止 `2.2s` 自动平滑淡出并隐藏回收。**全程绝不调用 `SetCursorPos` 或 `SendInput`**（全屏兜底模式除外），不移动你的物理鼠标，也不拦截你的任何点击。
 - **双层无焦点后台交互**：
   - **UI Automation 语义层**：使用 `IUIAutomation2` 并强制 `AutoSetFocus = FALSE`，后台无焦点执行 `Invoke`、`SetValue`、`Toggle`、`Select`、`Expand` / `Collapse`。
   - **Win32 消息层**：通过 `ChildWindowFromPointEx` 精准穿透子控件并投递 `WM_MOUSEMOVE`、`WM_LBUTTONDOWN` / `UP`、`WM_MOUSEWHEEL`、`WM_CHAR`（完整中英文 Unicode）与 `WM_KEYDOWN` / `UP`。
@@ -29,6 +29,21 @@
 | `cu_full_control_stop` | 主动退出「完全控制电脑」模式并隐藏黄色边框与急停按钮 |
 | `cu_screen_capture` | 全屏模式下截取主屏/全部显示器画面（自动排除警示边框与急停按钮，受急停硬门控） |
 | `cu_screen_click` | 全屏模式下按屏幕绝对物理坐标执行点击/双击（受急停硬门控） |
+
+## 安装与验证
+
+本插件无需修改 `app.asar`，直接运行安装脚本即可：
+
+```powershell
+# 1. 一键安装插件（Skills / Rules / 二进制）并注册全局 MCP 服务（全部 15 个工具可独立开关）
+python scripts\install.py
+
+# 2. 运行 MCP 端到端校验
+python scripts\test_mcp.py
+```
+
+> [!NOTE]
+> 安装脚本会自动将 `antigravity-computer-use` 注册到 `~/.gemini/config/mcp_config.json`（并清理插件目录下的重复 `mcp_config.json`），以确保全部 15 个工具默认启用且可在 **MCP 服务器** 面板中逐个点击开关。
 
 ## 从源码重新编译与安装
 
