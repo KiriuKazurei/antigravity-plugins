@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const PLUGIN_LOADER_VERSION = "2.5.0";
+const PLUGIN_LOADER_VERSION = "2.5.1";
 exports.PLUGIN_LOADER_VERSION = PLUGIN_LOADER_VERSION;
 exports.attachWebContents = attachWebContents;
 exports.translateTrayItem = translateTrayItem;
@@ -1757,6 +1757,95 @@ const sysBridgeRuntime = {
     startPromise: null,
 };
 
+const NATIVE_CONTEXT_MENU_ZH_MAP = {
+    Rename: "重命名",
+    Pin: "置顶",
+    Unpin: "取消置顶",
+    Star: "添加星标",
+    Unstar: "取消星标",
+    "Mark Unread": "标为未读",
+    "Mark as Unread": "标为未读",
+    "Mark Read": "标为已读",
+    "Mark as Read": "标为已读",
+    Copy: "复制",
+    Cut: "剪切",
+    Paste: "粘贴",
+    "Select All": "全选",
+    "Conversation Name": "对话名称",
+    "Conversation ID": "对话 ID",
+    "Project Name": "项目名称",
+    "Workspace Name": "工作区名称",
+    "Workspace Path": "工作区路径",
+    "Copy Path": "复制路径",
+    "Copy Relative Path": "复制相对路径",
+    Split: "分屏",
+    "Split Right": "向右分屏",
+    "Split Left": "向左分屏",
+    "Split Up": "向上分屏",
+    "Split Down": "向下分屏",
+    "Open in New Window": "在新窗口中打开",
+    "Open in New Tab": "在新标签页中打开",
+    "Reveal in File Explorer": "在资源管理器中显示",
+    "Reveal in Explorer": "在资源管理器中显示",
+    "Reveal in Finder": "在 Finder 中显示",
+    Duplicate: "创建副本",
+    Archive: "归档",
+    Unarchive: "取消归档",
+    Delete: "删除",
+    Remove: "移除",
+    Close: "关闭",
+    "Close Tab": "关闭标签页",
+    "Close Others": "关闭其他",
+    "Close Other Tabs": "关闭其他标签页",
+    "Close All": "全部关闭",
+    "Close Tabs to the Right": "关闭右侧标签页",
+    "Close Tabs to the Left": "关闭左侧标签页",
+    "New Conversation": "新建对话",
+    "New Terminal": "新建终端",
+    "New Tab": "新建标签页",
+    Export: "导出",
+    Share: "分享",
+    Reload: "重新加载",
+    Refresh: "刷新",
+};
+
+function translateContextMenuItemsForHost(items) {
+    if (!Array.isArray(items)) {
+        return items;
+    }
+    const active = getActiveUiPlugins();
+    const hasZh = active.some((p) => p && (p.dirName === "antigravity-zh-cn" || (p.dict && p.engineCode)));
+    if (!hasZh) {
+        return items;
+    }
+    const exactDict = {};
+    for (const p of active) {
+        if (p && p.dict && typeof p.dict.exact === "object" && p.dict.exact) {
+            Object.assign(exactDict, p.dict.exact);
+        }
+    }
+    const mapItem = (item) => {
+        if (!item || typeof item !== "object" || item.type === "separator") {
+            return item;
+        }
+        const copy = { ...item };
+        if (typeof copy.label === "string") {
+            const trimmed = copy.label.trim();
+            if (typeof exactDict[trimmed] === "string") {
+                copy.label = exactDict[trimmed];
+            }
+            else if (Object.prototype.hasOwnProperty.call(NATIVE_CONTEXT_MENU_ZH_MAP, trimmed)) {
+                copy.label = NATIVE_CONTEXT_MENU_ZH_MAP[trimmed];
+            }
+        }
+        if (Array.isArray(copy.submenu)) {
+            copy.submenu = copy.submenu.map(mapItem);
+        }
+        return copy;
+    };
+    return items.map(mapItem);
+}
+
 let contextMenuIpcHookInstalled = false;
 function installContextMenuIpcHook() {
     if (contextMenuIpcHookInstalled) {
@@ -1788,7 +1877,7 @@ function installContextMenuIpcHook() {
                         }
                     }
                 }
-                return listener(event, items);
+                return listener(event, translateContextMenuItemsForHost(items));
             });
         }
         if (channel === "window:close-context-menu" && typeof listener === "function") {
