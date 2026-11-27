@@ -69,7 +69,7 @@ python antigravity-context-doctor/scripts/install_context_doctor.py stage
 # 还原官方原版 app.asar（需先完全退出 Antigravity）
 python antigravity-context-doctor/scripts/install_context_doctor.py restore
 
-# 运行单元测试
+# 运行单元测试与模拟 DOM 回归（动态任务标签、菜单展开、标签切换和侧栏关闭/恢复）
 node antigravity-context-doctor/runtime/test_context_doctor.js
 ```
 

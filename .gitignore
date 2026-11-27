@@ -18,3 +18,4 @@ runtime/notify.log
 # Standalone repositories & workspace-only wrappers
 antigravity-zh-cn/
 scripts/install_plugin.py
+.conductor/

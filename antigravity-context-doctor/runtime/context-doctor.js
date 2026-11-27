@@ -663,6 +663,7 @@
       estTokens,
       thinkingTokensEst,
       preview: contentText.slice(0, 1200),
+      fullPreview: contentText,
       fullChars: chars,
     };
   }
@@ -1155,6 +1156,10 @@
     hitterQuery: '',
     hitterSort: 'size', // size | desc | asc
     expandedSteps: new Set(),
+    treemapMode: 'window',
+    overviewCategoryFilter: 'all',
+    overviewShowAll: false,
+    expandedOverviewItems: new Set(),
     insightsQuery: '',
     insightsSort: 'recent', // recent | tokens | steps
     handoffDraft: '',
@@ -1465,6 +1470,12 @@
 
     const activeCid = state.activeCascadeId || pickActiveCascadeId();
     const targetCid = state.inspectedCascadeId || activeCid;
+
+    if (targetCid !== state.computed.activeAnalysis?.cascadeId) {
+      state.overviewCategoryFilter = 'all';
+      state.overviewShowAll = false;
+      state.expandedOverviewItems.clear();
+    }
 
     const genByCid = new Map();
     for (const [k, v] of state.generatorCache.entries()) {
@@ -1859,7 +1870,7 @@
       const el = candidates[i];
       if (!el || typeof el.getBoundingClientRect !== 'function') continue;
       if (el.disabled || el.readOnly) continue;
-      if (el.closest && el.closest(`#${HOST_ID}`)) continue;
+      if (el.closest?.(`#${HOST_ID}, .xterm, .monaco-editor, [role="tabpanel"]`)) continue;
       const r = el.getBoundingClientRect();
       if (r.width < 120 || r.height < 20) continue;
       const score = r.top * 2 + r.width;
@@ -1987,11 +1998,11 @@
     ) {
       return true;
     }
-    if (!txt && r && r.width >= 16 && r.width <= 38 && r.height >= 16 && r.height <= 38) {
+    if (!txt && r && r.width >= 12 && r.width <= 48 && r.height >= 12 && r.height <= 48) {
       if (/^(add|new|plus|新建|添加)$/i.test(aria.trim())) return true;
       const svg = b.querySelector ? b.querySelector('svg') : null;
       const svgCls = svg && svg.getAttribute ? String(svg.getAttribute('class') || '') : '';
-      if (/plus/i.test(svgCls)) return true;
+      if (/(?:^|[\s_-])plus(?:$|\s)/i.test(svgCls)) return true;
     }
     return false;
   }
@@ -2000,15 +2011,14 @@
     if (typeof document === 'undefined' || !document.querySelectorAll) {
       return { found: false };
     }
-    const innerW = window.innerWidth || 1280;
-    const scope = paneEl && paneEl.querySelectorAll ? paneEl : document;
-    const paneRect = paneEl && typeof paneEl.getBoundingClientRect === 'function' ? paneEl.getBoundingClientRect() : null;
-    const minLeft = paneRect ? Math.max(0, paneRect.left - 4) : 28;
-    const maxRight = paneRect ? paneRect.right + 4 : innerW - 12;
-    const minTop = paneRect ? Math.max(0, paneRect.top - 4) : 0;
-    const maxTop = paneRect ? paneRect.top + 52 : 52;
+    if (!paneEl) return locateNativeAuxPane().strip || { found: false };
+    const paneRect = paneEl.getBoundingClientRect();
+    const minLeft = paneRect.left - 2;
+    const maxRight = paneRect.right + 2;
+    const minTop = paneRect.top - 2;
+    const maxTop = paneRect.top + 52;
 
-    const btns = scope.querySelectorAll('button, [role="tab"], [role="button"], [data-state]');
+    const btns = paneEl.querySelectorAll(AUX_TAB_CONTROLS);
     let plusBtn = null;
     let tabAnchor = null;
     const dynamicCandidates = [];
@@ -2016,13 +2026,13 @@
     for (let i = 0; i < btns.length; i++) {
       const b = btns[i];
       if (!isOutsidePluginHosts(b) || typeof b.getBoundingClientRect !== 'function') continue;
-      if (b.getAttribute && (b.getAttribute('data-agy-cd-tab') === '1' || b.getAttribute('data-agy-kb-tab') === '1')) continue;
+      if (b.closest?.('[data-agy-cd-tab="1"], [data-agy-kb-tab="1"], [role="menu"], [role="dialog"]') || b.getAttribute('data-agy-cd-tab') === '1') continue;
       const r = b.getBoundingClientRect();
       if (
         r.top < minTop ||
         r.top > maxTop ||
-        r.height < 16 ||
-        r.height > 44 ||
+        r.height < 12 ||
+        r.height > 56 ||
         r.left < minLeft ||
         r.right > maxRight ||
         r.width <= 0
@@ -2043,14 +2053,14 @@
         )
       ) {
         if (!tabAnchor) tabAnchor = b;
-      } else if (paneRect && txt.length >= 2 && txt.length <= 80 && r.width >= 48 && r.width <= 320) {
+      } else if (txt && r.width >= 28) {
         dynamicCandidates.push({ el: b, rect: r });
       }
     }
 
     // 针对浏览器网页标题（如 127.0.0.1:8768、拧螺丝...）、文件名、终端名等动态标签页
     if (!tabAnchor && dynamicCandidates.length > 0) {
-      dynamicCandidates.sort((a, b) => a.rect.left - b.rect.left);
+      dynamicCandidates.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
       tabAnchor = dynamicCandidates[0].el;
     }
 
@@ -2088,16 +2098,24 @@
       }
     }
 
-    const refEl = plusBtn || tabAnchor;
+    if (!tabAnchor && plusBtn) {
+      const plusRect = plusBtn.getBoundingClientRect();
+      for (let row = plusBtn.parentElement; row && row !== paneEl && row.getBoundingClientRect().height <= 68; row = row.parentElement) {
+        tabAnchor = Array.from(row.children).find(peer => {
+          const rect = peer.getBoundingClientRect();
+          return !peer.contains(plusBtn) && !peer.getAttribute('data-agy-cd-tab') && peer.textContent.trim() &&
+            rect.width >= 28 && rect.right <= plusRect.left + 2 && Math.abs(rect.top - plusRect.top) <= 12;
+        });
+        if (tabAnchor) break;
+      }
+    }
+    const refEl = tabAnchor || plusBtn;
     if (!refEl || !refEl.parentElement) {
       return { found: false };
     }
     let stripEl = refEl.parentElement;
-    // 若 refEl 被单个 tooltip/tab wrapper 包了一层，再往上找包含其他标签或 + 的行容器（且高度不超过 64px）
-    for (let up = 0; up < 2; up++) {
+    while (stripEl !== paneEl) {
       if (
-        stripEl.children &&
-        stripEl.children.length === 1 &&
         stripEl.parentElement &&
         stripEl.parentElement !== document.body &&
         stripEl.parentElement !== paneEl
@@ -2106,7 +2124,7 @@
           typeof stripEl.parentElement.getBoundingClientRect === 'function'
             ? stripEl.parentElement.getBoundingClientRect()
             : null;
-        if (!pr || pr.height <= 64) {
+        if (pr && pr.height > 0 && pr.height <= 68) {
           stripEl = stripEl.parentElement;
           continue;
         }
@@ -2114,7 +2132,7 @@
       break;
     }
     const rect = stripEl.getBoundingClientRect();
-    if (rect.height > 68) {
+    if (stripEl === paneEl || rect.height <= 0 || rect.height > 68 || (plusBtn && !stripEl.contains(plusBtn))) {
       return { found: false };
     }
     return {
@@ -2133,33 +2151,34 @@
     };
   }
 
+  const AUX_TAB_CONTROLS = 'button, a, [role="tab"], [role="button"], [tabindex], [draggable="true"], [data-state], .cursor-pointer';
+
+  function isRightPaneRect(rect, innerW, innerH) {
+    return rect.width >= 180 && rect.height >= innerH * 0.45 && rect.top >= -2 &&
+      rect.top <= innerH * 0.25 && rect.right >= innerW - 64 && rect.left >= 0 && rect.left < innerW - 100;
+  }
+
   function findAuxPaneByComposerSplit(composer, innerW, innerH) {
     if (!composer || typeof composer.getBoundingClientRect !== 'function') return null;
     const compRect = composer.getBoundingClientRect();
     let cur = composer.parentElement;
-    for (let depth = 0; cur && cur !== document.body && cur !== document.documentElement && depth < 12; depth++) {
+    for (; cur && cur !== document.documentElement; cur = cur.parentElement) {
       const children = cur.children || [];
       if (children.length >= 2) {
         for (let i = 0; i < children.length; i++) {
           const sib = children[i];
           if (!sib || sib === composer || !isOutsidePluginHosts(sib)) continue;
           if (sib.contains && sib.contains(composer)) continue;
-          if (hasLeftSidebarAnchor(sib)) continue;
           if (typeof sib.getBoundingClientRect !== 'function') continue;
           const r = sib.getBoundingClientRect();
           if (
             r.left >= compRect.right - 24 &&
-            r.width >= 240 &&
-            r.height >= innerH * 0.55 &&
-            r.top >= 0 &&
-            r.top <= 100 &&
-            r.right >= innerW - 36
+            isRightPaneRect(r, innerW, innerH) && !hasLeftSidebarAnchor(sib)
           ) {
             return sib;
           }
         }
       }
-      cur = cur.parentElement;
     }
     return null;
   }
@@ -2171,11 +2190,12 @@
     const innerW = window.innerWidth || 1280;
     const innerH = window.innerHeight || 800;
     const composer = findChatComposer();
-    let strip = locateNativeAuxTabStrip();
+    let best = findAuxPaneByComposerSplit(composer, innerW, innerH);
+    let strip = best && locateNativeAuxTabStrip(best);
 
     // 1. 寻找右侧边栏内部特征元素（地址栏、浏览器导航栏、启动器、xterm、iframe、Diff/Code 编辑器、顶部标签栏）
     let anchor = null;
-    const inputs = document.querySelectorAll('input');
+    const inputs = strip?.found ? [] : document.querySelectorAll('input');
     for (let i = 0; i < inputs.length; i++) {
       const inp = inputs[i];
       if (!isOutsidePluginHosts(inp) || typeof inp.getBoundingClientRect !== 'function') continue;
@@ -2194,7 +2214,7 @@
       }
     }
 
-    if (!anchor) {
+    if (!strip?.found && !anchor) {
       const navBtns = document.querySelectorAll('button, [role="button"]');
       for (let i = 0; i < navBtns.length; i++) {
         const b = navBtns[i];
@@ -2210,7 +2230,7 @@
       }
     }
 
-    if (!anchor) {
+    if (!strip?.found && !anchor) {
       const candidates = document.querySelectorAll('button, [role="button"], [role="menuitem"]');
       for (let i = 0; i < candidates.length; i++) {
         const el = candidates[i];
@@ -2226,7 +2246,7 @@
       }
     }
 
-    if (!anchor) {
+    if (!strip?.found && !anchor) {
       const frames = document.querySelectorAll('iframe, webview, .xterm, .monaco-diff-editor, .monaco-editor');
       for (let i = 0; i < frames.length; i++) {
         const f = frames[i];
@@ -2240,12 +2260,7 @@
       }
     }
 
-    if (!anchor && strip.found) {
-      anchor = strip.stripEl;
-    }
-
-    let best = null;
-    if (anchor) {
+    if (!strip?.found && anchor) {
       let cur = anchor.parentElement || anchor;
       for (let depth = 0; cur && cur !== document.body && cur !== document.documentElement && depth < 14; depth++) {
         if (typeof cur.getBoundingClientRect === 'function') {
@@ -2255,48 +2270,53 @@
           if (containsComposer || containsLeftSettings) {
             break;
           }
-          if (
-            r.width >= 240 &&
-            r.height >= innerH * 0.55 &&
-            r.top >= 0 &&
-            r.top <= 100 &&
-            r.right >= innerW - 36
-          ) {
-            best = cur;
+          if (isRightPaneRect(r, innerW, innerH)) {
+            const scoped = locateNativeAuxTabStrip(cur);
+            if (scoped.found) { best = cur; strip = scoped; break; }
           }
         }
         cur = cur.parentElement;
       }
     }
 
-    // 几何兜底：从主对话区 composer 向上寻找右侧同级分栏容器（不依赖内部 DOM 文案）
-    if (!best && composer) {
-      best = findAuxPaneByComposerSplit(composer, innerW, innerH);
+    if (!strip?.found) {
+      const seen = new Set();
+      for (const control of document.querySelectorAll(AUX_TAB_CONTROLS)) {
+        if (!isOutsidePluginHosts(control)) continue;
+        const cr = control.getBoundingClientRect();
+        if (!cr.width || !cr.height || cr.top < 0 || cr.top > innerH * 0.25) continue;
+        for (let pane = control.parentElement; pane && pane !== document.body && !seen.has(pane); pane = pane.parentElement) {
+          seen.add(pane);
+          const pr = pane.getBoundingClientRect();
+          if (pr.left < 1 || !isRightPaneRect(pr, innerW, innerH) || cr.top > pr.top + 52 ||
+              (composer && pane.contains(composer)) || hasLeftSidebarAnchor(pane)) continue;
+          const scoped = locateNativeAuxTabStrip(pane);
+          if (!scoped.found) continue;
+          const semanticTab = scoped.tabAnchor?.getAttribute('role') === 'tab' || scoped.stripEl.getAttribute('role') === 'tablist';
+          const tabWithPlus = scoped.tabAnchor && scoped.plusBtn;
+          const newTabAction = scoped.plusBtn && /new\s*tab|add\s*tab|新建标签|添加标签/i.test(
+            scoped.plusBtn.getAttribute('aria-label') || scoped.plusBtn.getAttribute('title') || ''
+          );
+          if (semanticTab || tabWithPlus || newTabAction) {
+            best = pane; strip = scoped; break;
+          }
+        }
+        if (strip?.found) break;
+      }
     }
 
-    if (best) {
-      if (!strip.found) {
-        strip = locateNativeAuxTabStrip(best);
-      }
+    if (best && strip?.found) {
       const r = best.getBoundingClientRect();
-      let radius = 10;
-      try {
-        const br = parseFloat(window.getComputedStyle(best).borderRadius);
-        if (Number.isFinite(br) && br >= 0 && br <= 20) radius = br;
-      } catch (_) {}
-      const stripBottom = strip.found ? strip.rect.bottom : 0;
-      const contentTop = strip.found
-        ? Math.max(Math.round(r.top), Math.round(stripBottom + 2))
-        : Math.max(Math.round(r.top), 38);
+      const contentTop = Math.max(Math.ceil(r.top), strip.rect.bottom + 2);
       return {
         found: true,
         paneEl: best,
+        strip,
         hasNativeTabStrip: strip.found,
         left: Math.round(r.left),
         top: contentTop,
         width: Math.round(r.width),
-        height: Math.max(200, Math.round(r.bottom - contentTop)),
-        radius,
+        height: Math.max(0, Math.floor(r.bottom - contentTop)),
         bgColor: (() => {
           try {
             const bg = window.getComputedStyle(best).backgroundColor;
@@ -2315,24 +2335,19 @@
     if (typeof document === 'undefined' || !document.querySelectorAll) return null;
     const innerW = window.innerWidth || 1280;
     const btns = document.querySelectorAll('button, [role="button"]');
-    let best = null;
-    let bestRight = -1;
     for (let i = 0; i < btns.length; i++) {
       const b = btns[i];
       if (!isOutsidePluginHosts(b) || typeof b.getBoundingClientRect !== 'function') continue;
       const r = b.getBoundingClientRect();
-      if (r.top >= 0 && r.top <= 42 && r.right >= innerW - 70 && r.width >= 18 && r.width <= 44 && r.height <= 40) {
+      if (r.top >= 0 && r.top <= 80 && r.right > innerW / 2 && r.width > 0 && r.height > 0) {
         const lbl = (b.getAttribute('aria-label') || b.getAttribute('title') || '').trim();
-        if (/side|pane|panel|aux|侧边|面板|right/i.test(lbl)) {
+        const iconClass = b.querySelector?.('svg')?.getAttribute('class') || '';
+        if (!/maximi|最大化|还原/i.test(lbl) && (/side panel|right (?:side\s?bar|pane|panel)|aux(?:iliary)? pane|辅助侧栏|右侧[边栏面板]|侧边面板/i.test(lbl) || /panel-right(?:-open)?\b/.test(iconClass))) {
           return b;
-        }
-        if (r.right > bestRight) {
-          bestRight = r.right;
-          best = b;
         }
       }
     }
-    return best;
+    return null;
   }
 
   function dismissOpenMenus() {
@@ -2345,32 +2360,10 @@
   }
 
   function openContextDoctorInPane(tryOpenNativePane) {
-    const aux = locateNativeAuxPane();
-    if (!aux.found && tryOpenNativePane) {
-      const toggleBtn = findRightPaneToggleButton();
-      if (toggleBtn && typeof toggleBtn.click === 'function') {
-        try {
-          toggleBtn.click();
-        } catch (_) {}
-        setTimeout(() => {
-          const nextAux = locateNativeAuxPane();
-          state.openedInNativePane = nextAux.found;
-          state.lastAuxRect = nextAux.found ? nextAux : null;
-          state.tabOpen = true;
-          state.prefs.open = true;
-          try {
-            window.dispatchEvent(new CustomEvent('agy-aux-plugin-activated', { detail: { id: 'antigravity-context-doctor' } }));
-          } catch (_) {}
-          savePrefs(state.prefs);
-          renderAll();
-          refreshTargetSession(true);
-          refreshGlobalInsights();
-        }, 90);
-        return;
-      }
+    if (tryOpenNativePane && !locateNativeAuxPane().found) {
+      const toggle = findRightPaneToggleButton();
+      if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
     }
-    state.openedInNativePane = aux.found;
-    state.lastAuxRect = aux.found ? aux : null;
     state.tabOpen = true;
     state.prefs.open = true;
     try {
@@ -2403,6 +2396,7 @@
     const st = document.createElement('style');
     st.id = 'agy-cd-menu-style';
     st.textContent = `
+      [data-agy-cd-positioned] { position: relative !important; }
       .agy-cd-menu-btn {
         display: flex;
         align-items: center;
@@ -2506,7 +2500,7 @@
   function applyMenuBadgeState(badge, analysis) {
     if (!badge) return;
     const pctText = analysis && analysis.latestContextTokens > 0 ? `${Math.round(analysis.occupancyPct)}%` : '--';
-    badge.textContent = pctText;
+    if (badge.textContent !== pctText) badge.textContent = pctText;
     if (analysis && analysis.occupancyPct >= state.prefs.criticalThresholdPct) {
       badge.style.background = 'rgba(239,68,68,0.18)';
       badge.style.color = '#f87171';
@@ -2561,7 +2555,8 @@
       e.preventDefault();
       e.stopPropagation();
       dismissOpenMenus();
-      openContextDoctorInPane(false);
+      if (window.requestAnimationFrame) window.requestAnimationFrame(() => openContextDoctorInPane(true));
+      else setTimeout(() => openContextDoctorInPane(true), 0);
     });
 
     return btn;
@@ -2693,7 +2688,7 @@
     }
   }
 
-  function syncAuxTabInStrip() {
+  function syncAuxTabInStrip(strip) {
     if (typeof document === 'undefined' || !document.querySelectorAll) return false;
     if (!state.tabOpen) {
       removeAuxTabFromStrip();
@@ -2701,14 +2696,9 @@
     }
 
     ensureMenuInjectStyles();
-    let strip = locateNativeAuxTabStrip();
-    if (!strip.found) {
-      const aux = locateNativeAuxPane();
-      if (aux.found && aux.paneEl) {
-        strip = locateNativeAuxTabStrip(aux.paneEl);
-      }
-    }
+    strip = strip || locateNativeAuxTabStrip();
     if (!strip.found || !strip.stripEl) {
+      removeAuxTabFromStrip();
       return false;
     }
 
@@ -2761,9 +2751,8 @@
         openContextDoctorInPane(false);
       });
 
-      const insertRef = strip.plusBtn && strip.plusBtn.parentElement === strip.stripEl
-        ? strip.plusBtn
-        : null;
+      let insertRef = strip.plusBtn;
+      while (insertRef && insertRef.parentElement !== strip.stripEl) insertRef = insertRef.parentElement;
       if (insertRef) {
         strip.stripEl.insertBefore(tabEl, insertRef);
       } else {
@@ -2774,10 +2763,11 @@
     tabEl.setAttribute('data-active', state.prefs.open ? 'true' : 'false');
     tabEl.setAttribute('aria-selected', state.prefs.open ? 'true' : 'false');
     const lblNode = tabEl.querySelector ? tabEl.querySelector('.agy-cd-aux-tab-lbl') : null;
-    if (lblNode) lblNode.textContent = isZh ? '上下文洞察' : 'Context Doctor';
+    const label = isZh ? '上下文洞察' : 'Context Doctor';
+    if (lblNode && lblNode.textContent !== label) lblNode.textContent = label;
     const pctNode = tabEl.querySelector ? tabEl.querySelector('.agy-cd-aux-tab-pct') : null;
     if (pctNode) {
-      pctNode.textContent = pctText;
+      if (pctNode.textContent !== pctText) pctNode.textContent = pctText;
       pctNode.style.display = pctText ? '' : 'none';
     }
     return true;
@@ -2793,43 +2783,7 @@
     auxSyncTimer = null;
     auxSyncLastAt = Date.now();
     syncPluginsMenuInjection();
-    if (state.prefs.open && !state.tabOpen) {
-      state.tabOpen = true;
-    }
-    if (state.tabOpen) {
-      syncAuxTabInStrip();
-    }
-    if (state.prefs.open) {
-      const aux = locateNativeAuxPane();
-      if (state.openedInNativePane && !aux.found) {
-        // 用户关闭了原生右侧边栏，自动隐藏当前分页
-        state.prefs.open = false;
-        state.openedInNativePane = false;
-        savePrefs(state.prefs);
-        renderAll();
-        return;
-      }
-      if (aux.found) {
-        const wasFloating = !state.openedInNativePane;
-        state.openedInNativePane = true;
-        if (wasFloating && state.tabOpen) {
-          syncAuxTabInStrip();
-        }
-        const prev = state.lastAuxRect;
-        if (
-          wasFloating ||
-          !prev ||
-          prev.left !== aux.left ||
-          prev.top !== aux.top ||
-          prev.width !== aux.width ||
-          prev.height !== aux.height ||
-          prev.hasNativeTabStrip !== aux.hasNativeTabStrip
-        ) {
-          state.lastAuxRect = aux;
-          applySidebarGeometry();
-        }
-      }
-    }
+    if (state.tabOpen) applySidebarGeometry();
   }
 
   function scheduleAuxSync() {
@@ -2837,9 +2791,8 @@
     const elapsed = Date.now() - auxSyncLastAt;
     if (elapsed >= AUX_SYNC_MIN_INTERVAL_MS) {
       auxSyncScheduled = true;
-      const raf =
-        typeof window.requestAnimationFrame === 'function' ? window.requestAnimationFrame : (fn) => setTimeout(fn, 16);
-      raf(flushAuxSync);
+      if (window.requestAnimationFrame) window.requestAnimationFrame(flushAuxSync);
+      else setTimeout(flushAuxSync, 16);
     } else {
       auxSyncTimer = setTimeout(flushAuxSync, AUX_SYNC_MIN_INTERVAL_MS - elapsed);
     }
@@ -2851,11 +2804,12 @@
         for (let i = 0; i < mutations.length; i++) {
           const m = mutations[i];
           if (m.target && !isOutsidePluginHosts(m.target)) continue;
+          if (m.target?.closest?.('[data-agy-cd-tab="1"], [data-agy-cd-menu-item="1"]')) continue;
           scheduleAuxSync();
           break;
         }
       });
-      obs.observe(document.body, { childList: true, subtree: true });
+      obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'aria-expanded'] });
     }
     window.addEventListener('resize', scheduleAuxSync);
     window.addEventListener('agy-aux-plugin-activated', (ev) => {
@@ -2873,26 +2827,8 @@
         if (!isOutsidePluginHosts(t)) return;
         if (t.closest && t.closest('[data-agy-cd-tab="1"], [data-agy-cd-menu-item="1"]')) return;
 
-        let strip = locateNativeAuxTabStrip();
-        if (!strip.found && state.lastAuxRect && state.lastAuxRect.paneEl) {
-          strip = locateNativeAuxTabStrip(state.lastAuxRect.paneEl);
-        }
-        if (strip.found && strip.stripEl && strip.stripEl.contains && strip.stripEl.contains(t)) {
-          const stripBtn = t.closest ? t.closest('button, [role="tab"], [role="button"], a') : null;
-          if (stripBtn && strip.stripEl.contains(stripBtn)) {
-            switchAwayFromContextDoctor();
-          }
-          return;
-        }
-
-        const btn = t.closest ? t.closest('button, [role="tab"], [role="menuitem"], [role="button"]') : null;
-        if (!btn) return;
-        const txt = (btn.textContent || '').trim();
-        if (
-          txt === '+' ||
-          btn.getAttribute?.('role') === 'tab' ||
-          /^(审查确认|Review Changes?|Open File|终端|Terminal|浏览器|Browser|Side Question|Swarm)$/i.test(txt)
-        ) {
+        const strip = state.lastAuxRect?.strip;
+        if (strip && ((strip.stripEl !== t && strip.stripEl.contains(t)) || findRightPaneToggleButton()?.contains(t))) {
           switchAwayFromContextDoctor();
         }
       },
@@ -2969,6 +2905,7 @@
   const STYLES = `
     :host {
       all: initial;
+      display: contents;
       font-family: var(--font-family, "Google Sans Flex", "Google Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
     }
     * { box-sizing: border-box; }
@@ -2987,6 +2924,8 @@
       --accent-soft: color-mix(in srgb, var(--accent) 15%, transparent);
       --cyan: #56b6c2;
       --purple: #a78bfa;
+      --rose: #db91aa;
+      --slate: #aaa4d8;
       --green: #7aae66;
       --amber: #cab43e;
       --red: #d95c5c;
@@ -3022,6 +2961,8 @@
       --red: #cb3d3d;
       --cyan: #0891b2;
       --purple: #7c3aed;
+      --rose: #a34469;
+      --slate: #625a93;
       --shadow: -6px 0 24px rgba(15, 23, 42, 0.12);
     }
 
@@ -3090,45 +3031,22 @@
 
     /* 停靠在原生右侧边栏内的主面板（遵循 Antigravity Aux Pane 标准结构） */
     .sidebar {
-      position: fixed;
-      top: 44px;
-      right: 8px;
-      bottom: 8px;
-      z-index: 2147482950;
+      container: doctor-pane / inline-size;
       background: var(--bg);
       color: var(--fg);
-      border: 1px solid var(--border-strong);
-      border-radius: 10px;
-      box-shadow: var(--shadow);
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      transition: transform 0.15s ease, opacity 0.14s ease;
     }
     .sidebar.docked-aux {
+      position: absolute;
+      z-index: 1;
+      border: 0;
+      border-radius: 0;
       box-shadow: none;
-      border-color: transparent;
-    }
-    .sidebar.docked-aux .resize-handle {
-      display: none;
     }
     .sidebar.closed {
-      transform: translateY(4px);
-      opacity: 0;
-      pointer-events: none;
-    }
-    .resize-handle {
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 5px;
-      cursor: ew-resize;
-      z-index: 10;
-    }
-    .resize-handle:hover {
-      background: var(--accent);
-      opacity: 0.45;
+      display: none;
     }
 
     /* 顶部栏 + 下划线标签（贴合 Antigravity 原生 Aux Pane 设计规范） */
@@ -3366,32 +3284,60 @@
     .kpi-sub { font-size: 11px; color: var(--fg-dim); margin-top: 2px; }
 
     /* 构成条与图例 */
-    .comp-bar {
-      height: 10px;
-      border-radius: 999px;
-      overflow: hidden;
-      display: flex;
-      background: color-mix(in srgb, var(--fg) 6%, transparent);
-      margin-bottom: 9px;
-    }
-    .legend-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 6px 12px;
-    }
-    .sidebar.wide .legend-grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-    .legend-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 11.5px;
-      gap: 6px;
-    }
-    .legend-left { display: flex; align-items: center; gap: 6px; min-width: 0; }
-    .swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
-    .legend-val { color: var(--fg-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .hero-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 24px; padding:4px 0 2px; }
+    @container doctor-pane (width < 340px) { .hero-grid { grid-template-columns:1fr; } }
+    .hero-label, .hero-metric { display:flex; align-items:center; flex-wrap:wrap; gap:6px; color:var(--fg-muted); }
+    .hero-label { min-height:20px; font-size:12px; font-weight:600; }
+    .health-badge { padding:1px 7px; border-radius:999px; font-size:10px; background:color-mix(in srgb,var(--status) 16%,transparent); color:color-mix(in srgb,var(--status) 68%,var(--fg)); }
+    .hero-metric { align-items:baseline; margin:3px 0; font-variant-numeric:tabular-nums; }
+    .hero-metric strong { font-size:24px; line-height:1.3; color:var(--fg); }
+    .hero-note { font-size:11px; color:var(--fg-muted); }
+    .cache-track, .detail-track { display:block; overflow:hidden; background:var(--bg-card); border-radius:999px; }
+    .cache-track { height:6px; margin:5px 0; }
+    .cache-track span, .detail-track span { display:block; height:100%; border-radius:inherit; background:var(--green); }
+    .overview-breakdown { min-width:0; font-variant-numeric:tabular-nums; }
+    .overview-breakdown button { font:inherit; color:inherit; cursor:pointer; }
+    .overview-breakdown button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+    .treemap-canvas { position:relative; width:100%; height:196px; border-radius:var(--r-lg); }
+    .sidebar.wide .treemap-canvas { height:220px; }
+    .tile-slot { position:absolute; padding:2px; overflow:hidden; }
+    .treemap-tile { display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; width:100%; height:100%; overflow:hidden; padding:0; text-align:left; border-radius:var(--r-md); border:1px solid color-mix(in srgb,var(--tile-color) 36%,var(--border)); background:color-mix(in srgb,var(--tile-color) 15%,var(--bg-elev)); }
+    .treemap-tile > * { flex:none; margin-inline:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .treemap-tile > :first-child { margin-top:4px; }
+    .treemap-tile strong { color:color-mix(in srgb,var(--tile-color) 52%,var(--fg)); font-size:12px; }
+    .treemap-tile span { font-size:11px; color:var(--fg-muted); }
+    button.treemap-tile:hover { transform:translateY(-1px); border-color:var(--tile-color); }
+    .treemap-tile[aria-pressed=true] { box-shadow:0 0 0 1.5px var(--tile-color); }
+    .treemap-tile.muted { opacity:0.55; }
+    .treemap-tile.remaining { border:1px solid var(--border); background:repeating-linear-gradient(-45deg,transparent,transparent 5px,color-mix(in srgb,var(--fg) 4.5%,transparent) 5px,color-mix(in srgb,var(--fg) 4.5%,transparent) 10px); }
+    .remaining strong { color:var(--fg-muted); font-weight:500; }
+    .overview-toolbar, .breakdown-heading, .overview-legend { display:flex; align-items:center; gap:6px 10px; flex-wrap:wrap; }
+    .overview-toolbar { justify-content:space-between; padding:8px 0 12px; }
+    .overview-legend { flex:1 1 160px; gap:3px 8px; }
+    .overview-legend-item, .overview-segments button, .overview-more { border:0; background:transparent; border-radius:var(--r-sm); }
+    .overview-legend-item { display:inline-flex; align-items:center; gap:4px; padding:2px; white-space:nowrap; }
+    .overview-toolbar, .breakdown-heading { font-size:11px; color:var(--fg-muted); }
+    .overview-legend-item:hover, .overview-more:hover, .detail-row:hover { background:var(--bg-hover); }
+    .overview-legend-item[aria-pressed=true] { color:var(--fg); background:var(--bg-card); }
+    .overview-swatch { display:inline-block; width:8px; height:8px; flex:none; border-radius:2px; background:var(--tile-color); }
+    .overview-segments { display:inline-flex; flex-wrap:wrap; gap:1px; padding:2px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); }
+    .overview-segments button { min-height:22px; padding:2px 6px; }
+    .treemap-mode { display:grid; place-items:center; }
+    .overview-segments [aria-pressed=true] { color:var(--fg); background:var(--bg-elev); box-shadow:0 0 0 1px var(--border); }
+    .breakdown-heading { justify-content:space-between; border-top:1px solid var(--border); padding:10px 0 6px; }
+    .detail-row { display:grid; grid-template-columns:8px minmax(0,1fr) minmax(24px,max-content) 42px 68px minmax(48px,max-content); align-items:center; gap:5px; width:100%; min-height:28px; padding:3px 2px; border:none; border-radius:var(--r-sm); background:transparent; text-align:left; }
+    .sidebar.wide .detail-row { grid-template-columns:8px minmax(0,1fr) minmax(24px,max-content) 44px 92px minmax(48px,max-content); }
+    .detail-label { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:12px; font-weight:500; }
+    .detail-count, .detail-tag, .detail-value { font-size:11px; white-space:nowrap; }
+    .detail-count { text-align:right; color:var(--fg-dim); font-family:var(--mono); }
+    .detail-tag { justify-self:end; background:var(--bg-card); color:var(--fg-muted); border-radius:var(--r-sm); padding:0 4px; font-family:var(--mono); }
+    .detail-tag.error { color:var(--red); }
+    .detail-track { height:5px; }
+    .detail-track span { background:var(--tile-color); }
+    .detail-value { text-align:right; color:var(--fg-muted); font-variant-numeric:tabular-nums; }
+    .overview-preview { margin:2px 0 6px 13px; padding:6px 8px; background:var(--bg-card); border-radius:var(--r-md); }
+    .overview-preview pre { margin:0 0 4px; max-height:180px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:11px/1.5 var(--mono); }
+    button.overview-more { padding:4px 8px; margin-top:4px; color:var(--fg-muted); background:var(--bg-card); font-size:11px; }
 
     /* 诊断列表 */
     .diag-item {
@@ -3607,11 +3553,13 @@
     file_read: 'var(--cyan)',
     command: 'var(--amber)',
     file_edit: 'var(--green)',
-    agent_tool: '#d87093',
+    agent_tool: 'var(--rose)',
+    system_overhead: 'var(--slate)',
   };
 
   function getCatLabel(key, isZh) {
     const mapZh = {
+      system_overhead: '系统提示词',
       user: '用户提问',
       assistant: 'AI & Thinking',
       file_read: '文件读取/搜索',
@@ -3620,6 +3568,7 @@
       agent_tool: 'Subagent/MCP',
     };
     const mapEn = {
+      system_overhead: 'System & Tools',
       user: 'User Input',
       assistant: 'AI & Thinking',
       file_read: 'File Reads',
@@ -3630,8 +3579,118 @@
     return (isZh ? mapZh : mapEn)[key] || key;
   }
 
+  function computeSquarifiedTreemap(items, x = 0, y = 0, width = 100, height = 100) {
+    const sorted = items.filter(item => Number.isFinite(item.value) && item.value > 0)
+      .sort((left, right) => right.value - left.value);
+    if (!sorted.length || width <= 0 || height <= 0) return [];
+    const total = sorted.reduce((sum, item) => sum + item.value, 0);
+    const areas = sorted.map(item => (item.value / total) * width * height);
+    const right = x + width, bottom = y + height;
+    const tiles = [];
+    for (let start = 0; start < sorted.length;) {
+      const vertical = right - x >= bottom - y;
+      const side = vertical ? bottom - y : right - x;
+      const worst = (sum, smallest) => Math.max(areas[start] * (side / sum) ** 2, (sum / side) ** 2 / smallest);
+      let end = start + 1, sum = areas[start];
+      while (end < sorted.length && worst(sum + areas[end], areas[end]) <= worst(sum, areas[end - 1])) {
+        sum += areas[end++];
+      }
+      const edge = vertical ? right : bottom;
+      const stripEnd = end === sorted.length ? edge : Math.min(edge, (vertical ? x : y) + sum / side);
+      let offset = vertical ? y : x;
+      for (let index = start; index < end; index++) {
+        const limit = vertical ? bottom : right;
+        const next = index === end - 1 ? limit : Math.min(limit, offset + side * (areas[index] / sum));
+        const rect = vertical ? { x, y: offset, w: stripEnd - x, h: next - offset }
+          : { x: offset, y, w: next - offset, h: stripEnd - y };
+        tiles.push({ ...sorted[index], ...rect });
+        offset = next;
+      }
+      if (vertical) x = stripEnd;
+      else y = stripEnd;
+      start = end;
+    }
+    return tiles;
+  }
+
+  const OVERVIEW_TAGS = { command: 'cmd', file_read: 'read', file_edit: 'edit', agent_tool: 'agent', assistant: 'AI', user: 'user' };
+
+  function buildOverviewDetails(steps, categories, usedTokens, isZh) {
+    const groups = new Map();
+    let turn = 0;
+    for (const [index, step] of steps.entries()) {
+      const { category, filePath, commandStr, subagentInfo, title } = step;
+      if (category === 'user') turn++;
+      const message = category === 'user' || category === 'assistant';
+      const prefix = commandStr?.trim().split(/\s+/).slice(0, 2).join(' ');
+      const name = filePath || prefix || subagentInfo?.role || title || step.typeName || category;
+      const id = `${category}:${message ? index : name}`;
+      if (!groups.has(id)) {
+        const label = message ? `${isZh ? `第 ${turn || 1} 轮` : `Turn ${turn || 1}`} · ${name}` : name;
+        groups.set(id, { id, category, label, tag: OVERVIEW_TAGS[category], count: 0,
+          rawTokens: 0, isError: false, parts: [], get preview() { return this.parts.join('\n\n'); } });
+      }
+      const item = groups.get(id);
+      item.count++;
+      item.rawTokens += step.estTokens;
+      item.isError ||= step.isError;
+      item.parts.push(step.fullPreview || step.preview || name);
+    }
+    const details = [];
+    for (const cat of categories) {
+      if (cat.key === 'system_overhead') {
+        details.push({ id: cat.key, category: cat.key, label: isZh ? '系统提示词与工具定义' : 'System prompts & tool definitions',
+          tag: 'system', count: 1, tokens: cat.tokens, rawTokens: cat.tokens, sharePct: cat.shareOfUsed, isError: false,
+          preview: isZh ? '按最新单轮上下文与轨迹估算的差值推算，包含系统提示词、工具定义和规则等。' : 'Estimated from the difference between the latest context and trajectory steps, including system prompts, tool schemas and rules.' });
+        continue;
+      }
+      let cumulative = 0, assigned = 0;
+      for (const item of groups.values()) {
+        if (item.category !== cat.key) continue;
+        cumulative += item.rawTokens;
+        const through = Math.round(cat.tokens * cumulative / cat.rawTokens);
+        item.tokens = through - assigned;
+        item.sharePct = usedTokens ? item.tokens / usedTokens * 100 : 0;
+        details.push(item);
+        assigned = through;
+      }
+    }
+    return details.sort((left, right) => right.tokens - left.tokens);
+  }
+
+  function buildContextTreemapModel(activeAnalysis, isZh) {
+    const { stepStats = {}, windowLimit = 0, latestContextTokens = 0 } = activeAnalysis || {};
+    const total = stepStats.totalStepTokens || 0;
+    const usedTokens = latestContextTokens || total;
+    const remainingTokens = Math.max(0, windowLimit - usedTokens);
+    const occupancyPct = windowLimit ? usedTokens / windowLimit * 100 : 0;
+    const categories = [];
+    const addCategory = (key, count, tokens, rawTokens) => categories.push({
+      key, id: key, count, tokens, rawTokens, value: tokens, label: getCatLabel(key, isZh), color: CAT_COLORS[key],
+      shareOfUsed: usedTokens ? tokens / usedTokens * 100 : 0, shareOfWindow: windowLimit ? tokens / windowLimit * 100 : 0,
+    });
+    let cumulative = 0, assigned = 0;
+    for (const cat of Object.values(stepStats.categories || {})) {
+      if (!(cat.estTokens > 0)) continue;
+      cumulative += cat.estTokens;
+      const through = total > usedTokens ? Math.round(usedTokens * cumulative / total) : cumulative;
+      addCategory(cat.key, cat.count, through - assigned, cat.estTokens);
+      assigned = through;
+    }
+    if (usedTokens > total) addCategory('system_overhead', 1, usedTokens - total, usedTokens - total);
+    categories.sort((left, right) => right.tokens - left.tokens);
+    const usedWidth = usedTokens ? (remainingTokens ? Math.max(28, occupancyPct) : 100) : 0;
+    const usedTiles = computeSquarifiedTreemap(categories);
+    const windowTiles = computeSquarifiedTreemap(categories, 0, 0, usedWidth, 100);
+    if (remainingTokens) windowTiles.push({ key: 'remaining', id: 'remaining', label: isZh ? '剩余空间' : 'Free Space',
+      tokens: remainingTokens, shareOfWindow: remainingTokens / windowLimit * 100, color: 'var(--border-strong)',
+      x: usedWidth, y: 0, w: 100 - usedWidth, h: 100 });
+    return { usedTokens, windowLimit, remainingTokens, occupancyPct, categories, windowTiles, usedTiles,
+      detailItems: buildOverviewDetails(stepStats.steps || [], categories, usedTokens, isZh) };
+  }
+
   function ensureShadowDom() {
-    if (shadowRootRef && document.getElementById(HOST_ID)) {
+    if (shadowRootRef) {
       return shadowRootRef;
     }
     if (!document || !document.body) return null;
@@ -3685,11 +3744,7 @@
         if (edgeMoved) {
           savePrefs(state.prefs);
         } else {
-          state.prefs.open = true;
-          savePrefs(state.prefs);
-          renderAll();
-          refreshTargetSession(true);
-          refreshGlobalInsights();
+          openContextDoctorInPane(true);
         }
       };
       window.addEventListener('mousemove', onMove);
@@ -3697,33 +3752,7 @@
     });
 
     // Right Sidebar
-    const resizeHandle = h('div', { className: 'resize-handle' });
-    resizeHandle.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      const startX = e.clientX;
-      const startW = state.prefs.sidebarWidth;
-      const onMove = (ev) => {
-        state.prefs.sidebarWidth = clampNumber(startW + (startX - ev.clientX), 320, 640, 400);
-        sidebar.style.width = `${state.prefs.sidebarWidth}px`;
-      };
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-        savePrefs(state.prefs);
-      };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
-    });
 
-    const hdrTitle = h('span', { className: 'hdr-title', textContent: '上下文洞察' });
-    const newTabPlusBtn = h('button', {
-      className: 'icon-btn',
-      textContent: '+',
-      title: '新建右侧边栏分页 (打开启动器)',
-      onClick: () => {
-        switchAwayFromContextDoctor();
-      },
-    });
     const pinBtn = h('button', {
       className: 'pill-btn',
       style: 'display:none',
@@ -3751,18 +3780,9 @@
         renderSettingsPopover();
       },
     });
-    const closeBtn = h('button', {
-      className: 'icon-btn',
-      textContent: '✕',
-      title: '关闭上下文洞察分页',
-      onClick: () => {
-        closeContextDoctor();
-      },
-    });
-
     const header = h('div', { className: 'hdr' }, [
-      h('div', { className: 'hdr-left' }, [hdrTitle, newTabPlusBtn, pinBtn]),
-      h('div', { className: 'hdr-actions' }, [refreshBtn, settingsBtn, closeBtn]),
+      h('div', { className: 'hdr-left' }, [pinBtn]),
+      h('div', { className: 'hdr-actions' }, [refreshBtn, settingsBtn]),
     ]);
 
     const gaugeBox = h('div', { className: 'gauge-box' });
@@ -3772,7 +3792,6 @@
     const toast = h('div', { className: 'toast' });
 
     const sidebar = h('div', { className: 'sidebar closed' }, [
-      resizeHandle,
       header,
       gaugeBox,
       tabsBar,
@@ -3792,8 +3811,7 @@
       edgeBarFill,
       edgeLbl,
       sidebar,
-      newTabPlusBtn,
-      hdrTitle,
+      host,
       pinBtn,
       gaugeBox,
       tabsBar,
@@ -3859,7 +3877,7 @@
       ])
     );
 
-    refs.gaugeBox.appendChild(
+    if (state.prefs.activeTab !== 'overview') refs.gaugeBox.appendChild(
       h('div', { className: 'gauge-nums' }, [
         h('span', {
           textContent: isZh
@@ -3879,7 +3897,7 @@
       ])
     );
 
-    refs.gaugeBox.appendChild(
+    if (state.prefs.activeTab !== 'overview') refs.gaugeBox.appendChild(
       h('div', { className: 'seg-bar' }, [
         h('div', { className: 'seg-cache', style: `width:${cachePct.toFixed(2)}%`, title: 'Cache Read' }),
         h('div', { className: 'seg-uncached', style: `width:${uncachedPct.toFixed(2)}%`, title: 'New Input' }),
@@ -3934,6 +3952,7 @@
             state.prefs.activeTab = t.id;
             savePrefs(state.prefs);
             if (t.id === 'insights') refreshGlobalInsights();
+            renderGaugeBox();
             renderBody();
             renderTabs();
           },
@@ -4040,12 +4059,12 @@
 
     const minLabel = svgEl(
       'text',
-      { x: padL, y: H - 3, fill: '#94a3b8', 'font-size': 9 },
+      { x: padL, y: H - 3, fill: 'var(--fg-muted)', 'font-size': 9 },
       [document.createTextNode(`#${slice[0].index}`)]
     );
     const maxLabel = svgEl(
       'text',
-      { x: W - padR, y: H - 3, 'text-anchor': 'end', fill: '#94a3b8', 'font-size': 9 },
+      { x: W - padR, y: H - 3, 'text-anchor': 'end', fill: 'var(--fg-muted)', 'font-size': 9 },
       [document.createTextNode(`${isZh ? '峰值' : 'Peak'} ${formatTokens(maxTok)} · #${slice[slice.length - 1].index}`)]
     );
     svg.appendChild(minLabel);
@@ -4099,7 +4118,7 @@
               x: (x + barW / 2).toFixed(1),
               y: Math.max(9, y - 3).toFixed(1),
               'text-anchor': 'middle',
-              fill: '#94a3b8',
+              fill: 'var(--fg-muted)',
               'font-size': 8.5,
             },
             [document.createTextNode(formatTokens(d.totalTokens))]
@@ -4114,7 +4133,7 @@
             x: (x + barW / 2).toFixed(1),
             y: H - 4,
             'text-anchor': 'middle',
-            fill: '#94a3b8',
+            fill: 'var(--fg-muted)',
             'font-size': 9,
           },
           [document.createTextNode(d.label)]
@@ -4122,6 +4141,127 @@
       );
     });
     return svg;
+  }
+
+  function renderOverviewHero(model, stats, isZh, estimated) {
+    const critical = model.occupancyPct >= state.prefs.criticalThresholdPct;
+    const warn = model.occupancyPct >= state.prefs.warnThresholdPct;
+    const status = critical ? (isZh ? '危急' : 'Critical') : warn ? (isZh ? '预警' : 'Warning') : (isZh ? '健康' : 'Healthy');
+    const advice = critical ? (isZh ? '建议立即交接' : 'Handoff recommended') : warn ? (isZh ? '接近预警' : 'Nearing capacity') : (isZh ? '余量充足' : 'Plenty of room');
+    const metric = (value, unit) => h('div', { className: 'hero-metric' }, [h('strong', {}, value), h('span', {}, unit)]);
+    return h('div', { className: 'hero-grid' }, [
+      h('div', {}, [
+        h('div', { className: 'hero-label' }, [isZh ? '已用上下文' : 'Context Used',
+          h('span', { className: 'health-badge', style: `--status:var(--${critical ? 'red' : warn ? 'amber' : 'green'})` }, status)]),
+        metric(formatTokens(model.usedTokens), `/ ${formatTokens(model.windowLimit)} token`),
+        h('div', { className: 'hero-note' }, `${estimated ? (isZh ? '估算已用' : 'Estimated usage') : (isZh ? '已用' : 'Used')} ${formatPct(model.occupancyPct, 0)} · ${advice}`),
+      ]),
+      h('div', {}, [h('div', { className: 'hero-label' }, isZh ? '提示词缓存' : 'Prompt Cache'),
+        metric(formatPct(stats.cacheHitRate, 2), isZh ? '命中' : 'hit'),
+        h('div', { className: 'cache-track' }, [h('span', { style: `width:${Math.min(100, Math.max(0, stats.cacheHitRate))}%` })]),
+        h('div', { className: 'hero-note' }, isZh
+          ? `累计命中 ${formatTokens(stats.totalCacheRead)} · ${stats.callCount} 次调用 · 压缩 ${stats.compactionCount}`
+          : `${formatTokens(stats.totalCacheRead)} cached · ${stats.callCount} calls · ${stats.compactionCount} compactions`),
+      ]),
+    ]);
+  }
+
+  function renderOverviewBreakdown(model, isZh) {
+    const panel = h('section', { className: 'overview-breakdown' });
+    const shortLabels = isZh
+      ? { all: '全部', system_overhead: '系统', command: '终端', file_read: '读文件', file_edit: '改写', assistant: 'AI', user: '提问', agent_tool: 'Agent/MCP' }
+      : { all: 'All', system_overhead: 'System', command: 'Terminal', file_read: 'Reads', file_edit: 'Edits', assistant: 'AI', user: 'User', agent_tool: 'Agent/MCP' };
+    if (!model.categories.some(cat => cat.key === state.overviewCategoryFilter)) state.overviewCategoryFilter = 'all';
+    const categoryControl = key => ({ 'data-category': key, 'aria-pressed': key === state.overviewCategoryFilter,
+      onClick: () => {
+        state.overviewCategoryFilter = state.overviewCategoryFilter === key ? 'all' : key;
+        state.overviewShowAll = false;
+        draw();
+      } });
+    const swatch = () => h('span', { className: 'overview-swatch', 'aria-hidden': true });
+    function draw() {
+      panel.textContent = '';
+      const filter = state.overviewCategoryFilter;
+      const windowMode = state.treemapMode === 'window';
+      const tiles = windowMode ? model.windowTiles : model.usedTiles;
+      const canvas = h('div', { className: 'treemap-canvas' });
+      for (const tile of tiles) {
+        const free = tile.key === 'remaining';
+        const pct = windowMode ? tile.shareOfWindow : tile.shareOfUsed;
+        const title = `${tile.label} · ${tile.tokens.toLocaleString()} token · ${formatPct(pct, 2)} ${windowMode ? (isZh ? '占窗口' : 'of window') : (isZh ? '占已用' : 'of used')}`;
+        const fullLabel = tile.w >= 11 && tile.h >= 22;
+        const showValue = fullLabel || (tile.w >= 7 && tile.h >= 12);
+        const props = free ? { 'data-category': tile.key } : categoryControl(tile.key);
+        const face = h(free ? 'div' : 'button', { ...props, title, 'aria-label': title,
+          className: `treemap-tile${free ? ' remaining' : ''}${filter !== 'all' && filter !== tile.key ? ' muted' : ''}` }, [
+          fullLabel && h('strong', {}, tile.label),
+          showValue && h('span', {}, `${formatTokens(tile.tokens)}${free ? ` · ${Math.round(pct)}%` : ''}`),
+        ]);
+        canvas.appendChild(h('div', { className: 'tile-slot', style: `--tile-color:${tile.color};left:${tile.x}%;top:${tile.y}%;width:${tile.w}%;height:${tile.h}%` }, [face]));
+      }
+      if (!tiles.length) canvas.appendChild(h('div', { className: 'empty' }, isZh ? '暂无已用上下文' : 'No used context yet'));
+      panel.appendChild(canvas);
+      const legend = h('div', { className: 'overview-legend' });
+      const freeTile = windowMode && tiles.find(tile => tile.key === 'remaining');
+      for (const cat of freeTile ? [...model.categories, freeTile] : model.categories) {
+        const free = cat.key === 'remaining';
+        legend.appendChild(h(free ? 'span' : 'button', { ...(free ? {} : categoryControl(cat.key)),
+          className: 'overview-legend-item', style: `--tile-color:${cat.color}`, title: cat.label }, [swatch(), cat.label, h('span', {}, formatTokens(cat.tokens))]));
+      }
+      const modes = h('div', { className: 'overview-segments' });
+      for (const mode of ['window', 'used']) {
+        const label = mode === 'window' ? (isZh ? '窗口比例视图' : 'Whole window') : (isZh ? '聚焦已用视图' : 'Used context only');
+        modes.appendChild(h('button', { className: 'treemap-mode', 'data-mode': mode, title: label, 'aria-label': label,
+          'aria-pressed': state.treemapMode === mode, onClick: () => { state.treemapMode = mode; draw(); } }, [
+          svgEl('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: 'currentColor', 'aria-hidden': true }, [
+            svgEl('path', { d: mode === 'window' ? 'M1 2h6v12H1z M9 2h6v5H9z M9 9h6v5H9z' : 'M1 1h4v4H1z M6 1h4v4H6z M11 1h4v4h-4z M1 6h4v4H1z M6 6h4v4H6z M11 6h4v4h-4z M1 11h4v4H1z M6 11h4v4H6z M11 11h4v4h-4z' }),
+          ]),
+        ]));
+      }
+      panel.appendChild(h('div', { className: 'overview-toolbar' }, [legend, modes]));
+      const filters = h('div', { className: 'overview-segments overview-filters' });
+      for (const [key, label] of Object.entries(shortLabels)) {
+        if (key === 'all' || model.categories.some(cat => cat.key === key)) filters.appendChild(h('button', {
+          className: 'overview-filter', ...categoryControl(key) }, label));
+      }
+      panel.appendChild(h('div', { className: 'breakdown-heading' }, [h('strong', {}, isZh ? '内容' : 'Breakdown'), filters]));
+      const list = filter === 'all' ? model.detailItems : model.detailItems.filter(item => item.category === filter);
+      const maxTokens = list[0]?.tokens || 1;
+      for (const item of state.overviewShowAll ? list : list.slice(0, 10)) {
+        const expanded = state.expandedOverviewItems.has(item.id);
+        const row = h('button', { className: 'detail-row', style: `--tile-color:${CAT_COLORS[item.category]}`, 'aria-expanded': expanded,
+          title: `${item.label} · ${item.tokens} token (${formatPct(item.sharePct)})`, onClick: () => {
+            if (expanded) state.expandedOverviewItems.delete(item.id); else state.expandedOverviewItems.add(item.id);
+            draw();
+          } }, [swatch(), h('span', { className: 'detail-label', title: item.label }, item.label),
+          h('span', { className: 'detail-count' }, item.count > 1 ? `×${item.count}` : ''),
+          h('span', { className: `detail-tag${item.isError ? ' error' : ''}` }, item.isError ? 'error' : item.tag),
+          h('span', { className: 'detail-track' }, [h('span', { style: `width:${100 * item.tokens / maxTokens}%` })]),
+          h('span', { className: 'detail-value' }, formatTokens(item.tokens))]);
+        panel.appendChild(row);
+        if (expanded) {
+          const text = item.preview;
+          panel.appendChild(h('div', { className: 'overview-preview' }, [h('pre', {}, text),
+            h('button', { className: 'pill-btn', onClick: async () => {
+              const copied = await copyToClipboard(text);
+              showToast(copied ? (isZh ? '已复制' : 'Copied') : (isZh ? '复制失败' : 'Copy failed'));
+            } }, isZh ? '复制' : 'Copy')]));
+        }
+      }
+      if (!state.computed.activeAnalysis.stepStats.totalStepTokens) {
+        const diagnostic = Object.entries(state.rpcDiag).filter(([, value]) => value)
+          .map(([name, value]) => `${name}: ${value}`).join(' · ');
+        panel.appendChild(h('div', { className: 'hero-note' }, [
+          isZh ? '暂无轨迹步骤明细；仍可查看窗口统计。' : 'No trajectory step details yet; window statistics remain available.',
+          diagnostic && ` (${diagnostic})`,
+        ]));
+      } else if (!list.length) panel.appendChild(h('div', { className: 'empty' }, isZh ? '暂无内容明细' : 'No breakdown available'));
+      if (list.length > 10) panel.appendChild(h('button', { className: 'overview-more', 'aria-expanded': state.overviewShowAll,
+        onClick: () => { state.overviewShowAll = !state.overviewShowAll; draw(); } },
+      state.overviewShowAll ? (isZh ? '收起' : 'Show less') : (isZh ? `显示全部 ${list.length} 项` : `Show all ${list.length} items`)));
+    }
+    draw();
+    return panel;
   }
 
   function renderOverviewTab(body) {
@@ -4132,97 +4272,9 @@
       return;
     }
     const g = a.genStats;
-    const s = a.stepStats;
-
-    // 1. 4 KPIs
-    body.appendChild(
-      h('div', { className: 'kpi-grid' }, [
-        h('div', { className: 'kpi' }, [
-          h('div', { className: 'kpi-label', textContent: isZh ? '最新单轮上下文' : 'Latest Context' }),
-          h('div', { className: 'kpi-val', textContent: formatTokens(a.latestContextTokens) }),
-          h('div', { className: 'kpi-sub', textContent: `${formatPct(a.occupancyPct)} · ${g.callCount} ${isZh ? '次调用' : 'calls'}` }),
-        ]),
-        h('div', { className: 'kpi' }, [
-          h('div', { className: 'kpi-label', textContent: isZh ? 'Prompt Cache 命中' : 'Cache Hit Rate' }),
-          h('div', { className: 'kpi-val', textContent: formatPct(g.cacheHitRate) }),
-          h('div', { className: 'kpi-sub', textContent: `${formatTokens(g.totalCacheRead)} cached` }),
-        ]),
-        h('div', { className: 'kpi' }, [
-          h('div', { className: 'kpi-label', textContent: isZh ? '累计 Token 消耗' : 'Session Total' }),
-          h('div', { className: 'kpi-val', textContent: formatTokens(g.totalTokens) }),
-          h('div', { className: 'kpi-sub', textContent: `In ${formatTokens(g.totalInput)} · Out ${formatTokens(g.totalOutput)}` }),
-        ]),
-        h('div', { className: 'kpi' }, [
-          h('div', { className: 'kpi-label', textContent: isZh ? '输出速度 & 压缩' : 'Speed & Compacts' }),
-          h('div', { className: 'kpi-val', textContent: formatTps(g.avgTps) }),
-          h('div', {
-            className: 'kpi-sub',
-            textContent: isZh
-              ? `Thinking ${formatTokens(g.totalThinking)} · 压缩 ${g.compactionCount}`
-              : `Think ${formatTokens(g.totalThinking)} · Compacts ${g.compactionCount}`,
-          }),
-        ]),
-      ])
-    );
-
-    // 2. Context Composition Breakdown
-    const compCard = h('div', { className: 'card' });
-    compCard.appendChild(
-      h('div', { className: 'card-title' }, [
-        h('span', { textContent: isZh ? '上下文内容构成 (按轨迹步骤估算)' : 'Context Composition (Estimated)' }),
-        h('span', { textContent: s.stepCount > 0 ? `${s.stepCount} steps` : 'No steps' }),
-      ])
-    );
-
-    if (s.totalStepTokens > 0) {
-      const compBar = h('div', { className: 'comp-bar' });
-      const legend = h('div', { className: 'legend-grid' });
-      for (const cat of Object.values(s.categories)) {
-        if (cat.estTokens <= 0) continue;
-        const color = CAT_COLORS[cat.key] || '#64748b';
-        compBar.appendChild(
-          h('div', {
-            style: `width:${Math.max(1.5, cat.sharePct).toFixed(2)}%; background:${color};`,
-            title: `${getCatLabel(cat.key, isZh)}: ${formatTokens(cat.estTokens)} (${formatPct(cat.sharePct)})`,
-          })
-        );
-        legend.appendChild(
-          h('div', { className: 'legend-item' }, [
-            h('div', { className: 'legend-left' }, [
-              h('span', { className: 'swatch', style: `background:${color};` }),
-              h('span', { textContent: getCatLabel(cat.key, isZh) }),
-            ]),
-            h('span', {
-              className: 'legend-val',
-              textContent: `${formatTokens(cat.estTokens)} (${formatPct(cat.sharePct, 0)})`,
-            }),
-          ])
-        );
-      }
-      compCard.appendChild(compBar);
-      compCard.appendChild(legend);
-    } else {
-      const diagHint =
-        state.rpcDiag && (state.rpcDiag.traj || state.rpcDiag.steps || state.rpcDiag.lastErr)
-          ? ` (${[
-              state.rpcDiag.traj && `traj:${state.rpcDiag.traj}`,
-              state.rpcDiag.gen && `gen:${state.rpcDiag.gen}`,
-              state.rpcDiag.steps && `steps:${state.rpcDiag.steps}`,
-            ]
-              .filter(Boolean)
-              .join(' · ')})`
-          : '';
-      compCard.appendChild(
-        h('div', {
-          className: 'empty',
-          style: 'padding:8px 0;',
-          textContent: isZh
-            ? `当前轨迹尚未返回步骤明细（仍可查看 Token 与演进曲线）${diagHint}`
-            : `No step payload returned yet (token stats remain active)${diagHint}`,
-        })
-      );
-    }
-    body.appendChild(compCard);
+    const model = buildContextTreemapModel(a, isZh);
+    body.appendChild(renderOverviewHero(model, g, isZh, !a.latestContextTokens && model.usedTokens > 0));
+    body.appendChild(renderOverviewBreakdown(model, isZh));
 
     // 3. Context Evolution SVG Chart
     const evoCard = h('div', { className: 'card' });
@@ -4949,35 +5001,24 @@
 
   function applySidebarGeometry() {
     if (!refs.sidebar) return;
-    const aux = state.prefs.open ? locateNativeAuxPane() : { found: false };
-    const useAux = aux.found || (state.openedInNativePane && state.lastAuxRect);
-    const rect = aux.found ? aux : useAux ? state.lastAuxRect : null;
-
-    syncHostThemeToRoot(rect && rect.bgColor ? rect.bgColor : '');
-    if (refs.newTabPlusBtn) {
-      refs.newTabPlusBtn.style.display = rect && rect.hasNativeTabStrip ? 'none' : 'inline-flex';
-    }
-
-    if (rect) {
-      refs.sidebar.style.left = `${rect.left}px`;
-      refs.sidebar.style.top = `${rect.top}px`;
-      refs.sidebar.style.width = `${rect.width}px`;
-      refs.sidebar.style.height = `${rect.height}px`;
-      refs.sidebar.style.right = 'auto';
-      refs.sidebar.style.bottom = 'auto';
-      refs.sidebar.style.borderRadius = `${rect.radius ?? 10}px`;
-      const isWide = rect.width >= 560;
-      refs.sidebar.className = `sidebar docked-aux ${isWide ? 'wide' : ''} ${state.prefs.open ? '' : 'closed'}`.trim();
-    } else {
-      refs.sidebar.style.left = 'auto';
-      refs.sidebar.style.right = '8px';
-      refs.sidebar.style.top = '44px';
-      refs.sidebar.style.bottom = '8px';
-      refs.sidebar.style.height = 'auto';
-      refs.sidebar.style.width = `${state.prefs.sidebarWidth}px`;
-      refs.sidebar.style.borderRadius = '10px';
-      refs.sidebar.className = `sidebar ${state.prefs.open ? '' : 'closed'}`;
-    }
+    const aux = state.tabOpen ? locateNativeAuxPane() : { found: false };
+    const mounted = syncAuxTabInStrip(aux.strip || { found: false });
+    const pane = mounted && state.prefs.open ? aux.paneEl : null;
+    const oldPane = state.lastAuxRect?.paneEl;
+    if (oldPane && oldPane !== pane) oldPane.removeAttribute?.('data-agy-cd-positioned');
+    state.openedInNativePane = !!pane;
+    state.lastAuxRect = pane ? aux : null;
+    const showEdge = !pane && state.prefs.showEdgeTab;
+    refs.edgeTab.className = `edge-tab ${showEdge ? '' : 'hidden'}`;
+    if (!pane) refs.sidebar.className = 'sidebar closed';
+    const parent = pane || document.body;
+    if (refs.host.parentElement !== parent) parent.appendChild(refs.host);
+    syncHostThemeToRoot(pane ? aux.bgColor : '');
+    if (!pane) return;
+    if (window.getComputedStyle(pane).position === 'static') pane.setAttribute('data-agy-cd-positioned', '');
+    refs.sidebar.style.left = refs.sidebar.style.right = refs.sidebar.style.bottom = '0px';
+    refs.sidebar.style.top = `${aux.top - pane.getBoundingClientRect().top - (pane.clientTop || 0)}px`;
+    refs.sidebar.className = `sidebar docked-aux${aux.width >= 560 ? ' wide' : ''}`;
   }
 
   function renderAll(opts) {
@@ -4989,8 +5030,7 @@
     const occ = a ? a.occupancyPct : 0;
 
     // Edge Tab (默认关闭)
-    const showEdge = !state.prefs.open && state.prefs.showEdgeTab;
-    refs.edgeTab.className = `edge-tab ${showEdge ? '' : 'hidden'}`;
+    applySidebarGeometry();
     refs.edgeTab.style.top = `${state.prefs.edgeTopPct}%`;
     refs.edgePct.textContent = a && a.latestContextTokens > 0 ? `${Math.round(occ)}%` : '--';
     refs.edgeBarFill.style.height = `${Math.min(100, Math.max(4, occ)).toFixed(0)}%`;
@@ -5006,11 +5046,6 @@
     }
 
     // Sidebar geometry & header
-    applySidebarGeometry();
-    refs.hdrTitle.textContent = isZh ? '上下文洞察' : 'Context Doctor';
-    if (refs.newTabPlusBtn) {
-      refs.newTabPlusBtn.title = isZh ? '新建其他分页（打开启动器）' : 'Open new tab launcher';
-    }
 
     if (a && a.isPinnedOther) {
       refs.pinBtn.style.display = 'inline-flex';
@@ -5037,7 +5072,6 @@
     renderSettingsPopover();
     renderToastOnly();
     syncPluginsMenuInjection();
-    syncAuxTabInStrip();
   }
 
   function installGlobalShortcut() {
@@ -5046,12 +5080,8 @@
       (e) => {
         if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'c' || e.key === 'C')) {
           e.preventDefault();
-          if (state.prefs.open) {
-            if (locateNativeAuxTabStrip().found) {
-              switchAwayFromContextDoctor();
-            } else {
-              closeContextDoctor();
-            }
+          if (state.openedInNativePane && locateNativeAuxPane().found) {
+            switchAwayFromContextDoctor();
           } else {
             openContextDoctorInPane(true);
           }
@@ -5064,11 +5094,6 @@
   function boot() {
     if (state.prefs.open) {
       state.tabOpen = true;
-      const initialAux = locateNativeAuxPane();
-      if (initialAux.found) {
-        state.openedInNativePane = true;
-        state.lastAuxRect = initialAux;
-      }
     }
     bootstrapRpcTap();
     installGlobalShortcut();
@@ -5111,6 +5136,8 @@
     extractStepsFromTrajectoryResponse,
     classifyStep,
     analyzeTrajectorySteps,
+    computeSquarifiedTreemap,
+    buildContextTreemapModel,
     buildContextInsights,
     diagnoseContextHealth,
     generateHandoffPrompt,

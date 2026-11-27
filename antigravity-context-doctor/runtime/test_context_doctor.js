@@ -214,6 +214,77 @@ assert.strictEqual(stepStats.recentErrors.length, 1);
 assert(stepStats.heavyHitters[0].estTokens >= stepStats.heavyHitters[1].estTokens);
 assert.strictEqual(stepStats.categories.command.count, 1);
 
+assert.strictEqual(typeof api.computeSquarifiedTreemap, 'function', 'expose the area layout');
+assert.strictEqual(api.computeSquarifiedTreemap([]).length, 0);
+const solo = api.computeSquarifiedTreemap([{ id: 'solo', value: 2 }], 5, 10, 70, 30)[0];
+assert.deepStrictEqual([solo.x, solo.y, solo.w, solo.h], [5, 10, 70, 30]);
+for (const values of [[7, 20, 7, 50, -1, 0, 16], [1, 1, 1, 1], [1, 1000000, 3, 2]]) {
+  const positive = values.filter(value => value > 0);
+  const total = positive.reduce((sum, value) => sum + value, 0);
+  const tiles = api.computeSquarifiedTreemap(values.map((value, id) => ({ value, id })));
+  assert.strictEqual(tiles.length, positive.length);
+  assert.strictEqual(new Set(tiles.map(tile => tile.id)).size, tiles.length);
+  tiles.forEach((tile, index) => {
+    assert(tile.w > 0 && tile.h > 0 && tile.x >= 0 && tile.y >= 0);
+    assert(tile.x + tile.w <= 100 && tile.y + tile.h <= 100);
+    const fraction = values[tile.id] / total;
+    assert(Math.abs(tile.w * tile.h / 10000 / fraction - 1) < 0.005);
+    if (values.every(value => value === 1)) assert.strictEqual(tile.w, tile.h);
+    for (const other of tiles.slice(index + 1)) {
+      const overlap = (axis, size) => Math.min(tile[axis] + tile[size], other[axis] + other[size]) - Math.max(tile[axis], other[axis]);
+      assert(overlap('x', 'w') < 1e-10 || overlap('y', 'h') < 1e-10);
+    }
+  });
+}
+
+const makeModel = (latest, limit, stats = stepStats, zh = true) => api.buildContextTreemapModel({
+  latestContextTokens: latest, windowLimit: limit, stepStats: stats,
+}, zh);
+const measured = stepStats.totalStepTokens + 123;
+const windowModel = makeModel(measured, measured * 10);
+assert.strictEqual(windowModel.usedTokens, measured);
+assert.strictEqual(windowModel.remainingTokens, measured * 9);
+assert.strictEqual(windowModel.occupancyPct, 10);
+const overhead = windowModel.categories.find(cat => cat.key === 'system_overhead');
+assert.deepStrictEqual([overhead.label, overhead.tokens], ['系统提示词', 123]);
+const free = windowModel.windowTiles.find(tile => tile.key === 'remaining');
+assert.deepStrictEqual([free.x, free.w, free.shareOfWindow], [28, 72, 90]);
+assert.strictEqual(makeModel(measured, measured * 2).windowTiles.find(tile => tile.key === 'remaining').x, 50);
+assert(!windowModel.usedTiles.some(tile => tile.key === 'remaining'));
+for (const tile of windowModel.usedTiles) {
+  assert(Math.abs(tile.w * tile.h / 100 - tile.tokens / measured * 100) < 1e-8);
+  const part = windowModel.windowTiles.find(item => item.key === tile.key);
+  assert(Math.abs(part.w * part.h / 28 - tile.shareOfUsed) < 1e-8);
+}
+const sumTokens = items => items.reduce((sum, item) => sum + item.tokens, 0);
+const scaled = makeModel(701, 500);
+assert.strictEqual(sumTokens(scaled.categories), 701);
+assert.strictEqual(sumTokens(scaled.detailItems), 701);
+assert.strictEqual(scaled.remainingTokens, 0);
+assert(!scaled.windowTiles.some(tile => tile.key === 'remaining'));
+assert(!scaled.categories.some(cat => cat.key === 'system_overhead'));
+for (const cat of scaled.categories) {
+  assert(Math.abs(cat.tokens - 701 * stepStats.categories[cat.key].sharePct / 100) < 1);
+}
+assert.strictEqual(makeModel(0, measured).usedTokens, stepStats.totalStepTokens);
+const emptyModel = makeModel(0, 100, api.analyzeTrajectorySteps([]));
+assert.strictEqual(emptyModel.windowTiles[0].w, 100);
+assert.strictEqual(emptyModel.usedTiles.length, 0);
+const groupedStats = api.analyzeTrajectorySteps([...steps, ...steps, {
+  type: 'RUN_COMMAND', runCommand: { commandLine: 'npm test --verbose', output: 'final line' },
+}]);
+const grouped = makeModel(groupedStats.totalStepTokens, measured, groupedStats, false);
+assert.strictEqual(grouped.detailItems.find(item => item.category === 'command').count, 3);
+assert.strictEqual(grouped.detailItems.find(item => item.category === 'agent_tool').count, 2);
+assert.strictEqual(grouped.detailItems.filter(item => item.category === 'user').length, 2);
+assert.strictEqual(grouped.detailItems.filter(item => item.category === 'assistant').length, 2);
+const reads = windowModel.detailItems.find(item => item.category === 'file_read');
+assert(reads.label.includes('auth.ts') && reads.count === 3 && reads.tokens === stepStats.categories.file_read.estTokens);
+assert(reads.preview.includes('x'.repeat(1500)) && reads.preview.includes('z'.repeat(100)));
+assert(windowModel.detailItems.find(item => item.category === 'command').isError);
+assert(windowModel.detailItems.some(item => item.tag === 'system' && item.tokens === 123));
+assert(windowModel.detailItems.every((item, index, items) => !index || item.tokens <= items[index - 1].tokens));
+
 // 1.5 buildContextInsights (7-day + fleet)
 const nowMs = Date.parse('2026-11-23T08:00:00Z');
 const genByCid = new Map([
@@ -348,6 +419,7 @@ function makeFakeElement(tag) {
     },
     appendChild(child) {
       if (!child) return child;
+      if (child.parentNode) child.parentNode.removeChild(child);
       child.parentNode = this;
       child.parentElement = this;
       this.children.push(child);
@@ -396,6 +468,7 @@ function makeFakeElement(tag) {
         if (cur.nodeType === 1) {
           const matched =
             tags.has(cur.tagName) ||
+            (/^\.[\w-]+$/.test(sel) && cur.className.split(/\s+/).includes(sel.slice(1))) ||
             (sel === 'input.input' && cur.tagName === 'INPUT') ||
             (sel === '.sidebar' && String(cur.className).includes('sidebar')) ||
             (sel.includes('[data-agy-cd-menu-item="1"]') && cur.getAttribute('data-agy-cd-menu-item') === '1') ||
@@ -447,6 +520,8 @@ function makeFakeElement(tag) {
 
 const fakeBody = makeFakeElement('body');
 const fakeHead = makeFakeElement('head');
+const docListeners = {};
+let notifyHostMutation;
 
 // 模拟原生右侧边栏、顶部原生标签栏（审查确认 +）与「插件 > Swarm」子菜单
 const mockAuxWrapper = makeFakeElement('div');
@@ -526,13 +601,17 @@ const fakeDoc = {
     }
     return out;
   },
-  addEventListener: () => {},
+  addEventListener(type, listener) { docListeners[type] = listener; },
   dispatchEvent: () => true,
 };
 
 const domCtx = vm.createContext({
   window: null,
   document: fakeDoc,
+  MutationObserver: class {
+    constructor(callback) { notifyHostMutation = callback; }
+    observe() {}
+  },
   setTimeout,
   clearTimeout,
   setInterval: () => 1,
@@ -570,6 +649,8 @@ domCtx.removeEventListener = () => {};
 domCtx.fetch = () =>
   Promise.resolve({ ok: true, headers: { get: () => 'application/json' }, json: () => Promise.resolve({}) });
 
+domCtx.localStorage.setItem('agy_context_doctor_prefs_v2', JSON.stringify({ open: true }));
+fakeBody.removeChild(mockAuxWrapper);
 vm.runInContext(code, domCtx, { filename: 'context-doctor.js' });
 
 const hostEl = fakeDoc.getElementById('agy-context-doctor-host');
@@ -577,6 +658,12 @@ assert(hostEl && hostEl.shadowRoot, 'Shadow DOM host #agy-context-doctor-host mu
 
 const domApi = domCtx.__AGY_CONTEXT_DOCTOR_TEST_API__;
 const st = domApi.getState();
+const sidebar = hostEl.shadowRoot.querySelector('.sidebar');
+const isClosed = () => sidebar.className.split(/\s+/).includes('closed');
+assert(isClosed(), 'restoring open prefs on the welcome page must not show a floating panel');
+fakeBody.appendChild(mockAuxWrapper);
+notifyHostMutation([{ target: fakeBody }]);
+assert(!isClosed() && mockTabStrip.querySelector('[data-agy-cd-tab="1"]'), 'restore must dock when the native strip mounts');
 assert.strictEqual(st.prefs.showEdgeTab, false, 'floating edge tab must be disabled by default');
 
 st.activeCascadeId = 'cid-main';
@@ -616,6 +703,71 @@ const injectedTabs = fakeDoc.querySelectorAll('[data-agy-cd-tab="1"]');
 assert.strictEqual(injectedTabs.length, 1, 'must inject one tab into native Aux Pane tab strip');
 assert.strictEqual(injectedTabs[0].getAttribute('data-active'), 'true');
 assert.strictEqual(mockTabStrip.children[1], injectedTabs[0], 'injected tab must sit before + button');
+
+{
+  st.stepsCache.set('cid-main', { stamp: '2', steps: steps.concat(Array(11).fill(steps[0])) });
+  domApi.recomputeState();
+  domApi.renderAll();
+  const root = hostEl.shadowRoot;
+  const all = selector => root.querySelectorAll(selector);
+  const byKey = (selector, key) => all(selector).find(node => node.getAttribute('data-category') === key);
+  const click = node => { assert(node, 'control must exist'); node.listeners.click[0](); };
+  const hero = root.querySelector('.hero-grid');
+  assert(hero && hero.children.length === 2 && hero.textContent.includes('已用上下文') && hero.textContent.includes('提示词缓存'));
+  assert.strictEqual(all('.gauge-nums').length, 0);
+  assert(root.querySelector('.model-tag') && root.querySelector('.treemap-canvas').textContent.includes('剩余空间'));
+  assert.strictEqual(all('.detail-row').length, 10);
+  click(root.querySelector('.overview-more'));
+  assert(all('.detail-row').length > 10);
+  click(root.querySelector('.overview-more'));
+  assert.strictEqual(all('.detail-row').length, 10);
+  click(byKey('.treemap-tile', 'file_read'));
+  assert.strictEqual(all('.detail-row').length, 1);
+  assert(root.querySelector('.detail-row').textContent.includes('×3'));
+  assert.strictEqual(byKey('.overview-filter', 'file_read').getAttribute('aria-pressed'), 'true');
+  click(root.querySelector('.detail-row'));
+  const preview = root.querySelector('.overview-preview');
+  assert(preview.textContent.includes('z'.repeat(100)) && preview.textContent.includes('复制'));
+  let copied = '';
+  domCtx.navigator = { clipboard: { writeText(text) { copied = text; } } };
+  click(preview.querySelector('button'));
+  assert.strictEqual(copied, reads.preview);
+  click(root.querySelector('.detail-row'));
+  assert(!root.querySelector('.overview-preview'));
+  click(byKey('.overview-legend-item', 'file_read'));
+  assert.strictEqual(all('.detail-row').length, 10);
+  click(byKey('.overview-filter', 'command'));
+  assert.strictEqual(byKey('.treemap-tile', 'command').getAttribute('aria-pressed'), 'true');
+  assert.strictEqual(byKey('.overview-legend-item', 'command').getAttribute('aria-pressed'), 'true');
+  assert(root.querySelector('.detail-row').textContent.includes('npm test'));
+  const mode = key => all('.treemap-mode').find(node => node.getAttribute('data-mode') === key);
+  click(mode('used'));
+  assert(!byKey('.treemap-tile', 'remaining') && mode('used').getAttribute('aria-pressed') === 'true');
+  click(mode('window'));
+  assert(byKey('.treemap-tile', 'remaining'));
+  click(byKey('.overview-filter', 'all'));
+  click(all('.tab').find(node => node.textContent === '大户'));
+  assert(root.querySelector('.seg-bar'));
+  click(all('.tab').find(node => node.textContent === '总览'));
+  assert(!root.querySelector('.seg-bar'));
+  st.isZh = false;
+  st.isDark = false;
+  domApi.renderAll();
+  assert(root.querySelector('.root').className.includes('light'));
+  assert(root.querySelector('.hero-grid').textContent.includes('Prompt Cache'));
+  assert(root.querySelector('.treemap-canvas').textContent.includes('Free Space'));
+  const analysis = st.computed.activeAnalysis;
+  analysis.stepStats = domApi.analyzeTrajectorySteps([]);
+  st.rpcDiag.steps = 'test-step-timeout';
+  analysis.windowLimit = analysis.latestContextTokens;
+  analysis.occupancyPct = 100;
+  domApi.renderAll();
+  assert(root.querySelector('.warn-banner') && root.querySelector('.health-badge').textContent === 'Critical');
+  assert(root.querySelector('.overview-breakdown').textContent.includes('test-step-timeout'));
+  assert(all('.detail-row').some(node => node.textContent.includes('System prompts')));
+  st.rpcDiag.steps = '';
+  st.stepsCache.set('cid-main', { stamp: '1', steps });
+}
 
 for (const tab of ['overview', 'hitters', 'fleet', 'insights', 'handoff']) {
   st.prefs.activeTab = tab;
@@ -773,6 +925,68 @@ assert(
 );
 
 domApi.closeContextDoctor();
+browserAuxPane.removeChild(urlBar);
+chatPane.removeChild(composerEl);
+const leftStrip = makeFakeElement('div');
+leftStrip._rect = { left: 80, top: 4, right: 200, bottom: 36, width: 120, height: 32 };
+const leftPlus = makeFakeElement('button');
+leftPlus.textContent = '+';
+leftPlus._rect = { left: 100, top: 6, right: 124, bottom: 30, width: 24, height: 24 };
+leftStrip.appendChild(leftPlus);
+chatPane.appendChild(leftStrip);
+siteTab1.textContent = 'Run VAC build';
+siteTab2.textContent = 'npm run dev';
+const plusWrapper = makeFakeElement('div');
+plusWrapper._rect = { left: 1248, top: 66, right: 1280, bottom: 98, width: 32, height: 32 };
+svgPlusBtn._rect = plusWrapper._rect;
+browserTabStrip.removeChild(svgPlusBtn);
+plusWrapper.appendChild(svgPlusBtn);
+browserTabStrip.appendChild(plusWrapper);
+browserTabStrip._rect = { left: 520, top: 62, right: 1280, bottom: 104, width: 760, height: 42 };
+for (const tab of [siteTab1, siteTab2]) Object.assign(tab._rect, { top: 66, bottom: 94 });
+browserAuxPane._rect = { ...browserAuxPane._rect, top: 60, height: 740 };
+const nativeDock = domApi.locateNativeAuxPane();
+assert.strictEqual(nativeDock.paneEl, browserAuxPane, 'dynamic task tabs must identify the right pane without a composer or URL');
+siteTab1.tagName = siteTab2.tagName = 'DIV';
+domApi.openContextDoctorInPane(false);
+const taskTab = browserTabStrip.querySelector('[data-agy-cd-tab="1"]');
+assert(taskTab && browserTabStrip.children[2] === taskTab && !leftStrip.contains(taskTab), 'inject before wrapped + in the matching native strip');
+assert.strictEqual(hostEl.parentElement, browserAuxPane, 'active content belongs to the native pane');
+assert(browserAuxPane._rect.top + parseFloat(sidebar.style.top) >= browserTabStrip._rect.bottom && !isClosed(), 'content must not cover the native tab row');
+const clickEvent = target => ({ target, preventDefault() {}, stopPropagation() {} });
+docListeners.click(clickEvent(siteTab1));
+assert(isClosed() && taskTab.getAttribute('aria-selected') === 'false', 'clicking a dynamic tab must release the native content');
+taskTab.listeners.click[0](clickEvent(taskTab));
+assert(!isClosed() && taskTab.getAttribute('aria-selected') === 'true');
+splitRoot.removeChild(browserAuxPane);
+domApi.renderAll();
+assert(isClosed(), 'a removed pane must never fall back to a cached rect or a floating drawer');
+const replacedStrip = makeFakeElement('div');
+replacedStrip._rect = browserTabStrip._rect;
+for (const native of [siteTab1, siteTab2, plusWrapper]) replacedStrip.appendChild(native);
+browserAuxPane.removeChild(browserTabStrip);
+browserAuxPane.appendChild(replacedStrip);
+splitRoot.appendChild(browserAuxPane);
+domApi.renderAll();
+assert(!isClosed() && replacedStrip.querySelectorAll('[data-agy-cd-tab="1"]').length === 1, 'remount into the replacement strip without duplicating tabs');
+domApi.closeContextDoctor();
+splitRoot.removeChild(browserAuxPane);
+const toggle = makeFakeElement('button');
+toggle.setAttribute('aria-label', 'Toggle Side Panel');
+toggle._rect = { left: 1220, top: 4, right: 1252, bottom: 36, width: 32, height: 32 };
+let toggleCount = 0;
+toggle.click = () => { toggleCount++; };
+fakeBody.appendChild(toggle);
+fakeBody.appendChild(mockPluginsPopup);
+injectedItems[0].listeners.click[0](clickEvent(injectedItems[0]));
+assert.strictEqual(toggleCount, 1, 'menu action must request the native pane exactly once');
+assert(isClosed(), 'waiting for the native pane must not open a drawer');
+splitRoot.appendChild(browserAuxPane);
+domApi.renderAll();
+const menuTab = replacedStrip.querySelector('[data-agy-cd-tab="1"]');
+assert(menuTab && !isClosed(), 'delayed menu-open must dock once the native pane exists');
+menuTab.querySelector('.agy-cd-aux-tab-close').listeners.click[0](clickEvent(menuTab));
+assert(isClosed() && !replacedStrip.querySelector('[data-agy-cd-tab="1"]'));
 fakeDoc.body.children = prevChildren;
 
 console.log('All antigravity-context-doctor tests passed!');
