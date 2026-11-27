@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const PLUGIN_LOADER_VERSION = "2.5.1";
+const PLUGIN_LOADER_VERSION = "2.5.2";
 exports.PLUGIN_LOADER_VERSION = PLUGIN_LOADER_VERSION;
 exports.attachWebContents = attachWebContents;
 exports.translateTrayItem = translateTrayItem;
@@ -2052,6 +2052,50 @@ async function handleSysBridgeRequest(req, res) {
             sendSysJson(res, launched.ok ? 200 : 500, launched, origin);
             return;
         }
+        if (reqUrl === "/sys/kb-clip") {
+            const rawContent = typeof body.content === "string" ? body.content.trim() : "";
+            if (!rawContent) {
+                sendSysJson(res, 400, { ok: false, error: "Empty clip content" }, origin);
+                return;
+            }
+            const vaultDir = ensureDefaultKbVault();
+            const rawTitle = typeof body.title === "string" && body.title.trim()
+                ? body.title.trim()
+                : `右键剪藏 ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
+            const safeName = rawTitle.replace(/[\\/:*?"<>|\r\n]+/g, "_").slice(0, 60).trim() || `clip-${Date.now()}`;
+            const clipsDir = path.join(vaultDir, "剪藏");
+            fs.mkdirSync(clipsDir, { recursive: true });
+            let dst = path.join(clipsDir, `${safeName}.md`);
+            if (fs.existsSync(dst)) {
+                dst = path.join(clipsDir, `${safeName}-${Date.now().toString(36).slice(-4)}.md`);
+            }
+            const ts = new Date().toISOString().slice(0, 19).replace("T", " ");
+            const md = [
+                "---",
+                `title: "${rawTitle.replace(/"/g, '\\"')}"`,
+                "tags: [剪藏, 右键收藏]",
+                `updated: ${ts}`,
+                "---",
+                "",
+                `# ${rawTitle}`,
+                "",
+                rawContent,
+                "",
+            ].join("\n");
+            fs.writeFileSync(dst, md, "utf8");
+            sendSysJson(
+                res,
+                200,
+                {
+                    ok: true,
+                    fullPath: dst,
+                    relPath: path.relative(vaultDir, dst).replace(/\\/g, "/"),
+                    title: rawTitle,
+                },
+                origin
+            );
+            return;
+        }
 
         sendSysJson(res, 404, { ok: false, error: "Unknown route" }, origin);
     }
@@ -2199,8 +2243,9 @@ function attachWebContents(contents) {
                 const sysBridgeInfo = p.dirName === "antigravity-context-menu"
                     ? await ensureSysBridgeStarted(p.pluginPath)
                     : null;
+                const activePluginDirs = plugins.map((item) => item.dirName);
                 for (const script of p.uiScripts) {
-                    const meta = JSON.stringify({ id: p.dirName, rel: script.rel, appVersion });
+                    const meta = JSON.stringify({ id: p.dirName, rel: script.rel, appVersion, activePlugins: activePluginDirs });
                     const historyInitStmt = initHistory
                         ? `window.__AGY_USAGE_HISTORY_INIT__ = ${JSON.stringify(initHistory)};\n`
                         : "";
@@ -2208,7 +2253,7 @@ function attachWebContents(contents) {
                         ? `window.__AGY_KB_BRIDGE__ = ${JSON.stringify(kbBridgeInfo)};\n`
                         : "";
                     const sysBridgeStmt = sysBridgeInfo
-                        ? `window.__AGY_SYSTEM_BRIDGE__ = ${JSON.stringify(sysBridgeInfo)};\n`
+                        ? `window.__AGY_SYSTEM_BRIDGE__ = ${JSON.stringify({ ...sysBridgeInfo, activePlugins: activePluginDirs })};\n`
                         : "";
                     const widgetCode = `(function(){\ntry{\nwindow.__AGY_PLUGIN_META__ = ${meta};\n${historyInitStmt}${kbBridgeStmt}${sysBridgeStmt}${script.code}\n}catch(err){console.warn('[AgyPluginLoader]', err);}\n})();`;
                     void Promise.resolve(contents.executeJavaScript(widgetCode, true))

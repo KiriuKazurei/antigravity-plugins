@@ -260,4 +260,50 @@ test('convertNativeMenuItems & hasNativeCopyItem: preserves native ids, submenus
   assert.strictEqual(ctxMenu.hasNativeCopyItem([{ id: 'rename', label: '重命名' }]), false);
 });
 
+test('moduleMatchesZone & applyPlacementFolding: enforces zone scoping and folds configured items into submenu', () => {
+  assert.strictEqual(ctxMenu.moduleMatchesZone(['workspace'], 'workspace'), true);
+  assert.strictEqual(ctxMenu.moduleMatchesZone(['workspace'], 'sidebar'), false);
+  assert.strictEqual(ctxMenu.moduleMatchesZone(['sidebar'], 'sidebar'), true);
+  assert.strictEqual(ctxMenu.moduleMatchesZone(['all'], 'sidebar'), true);
+
+  const reg = ctxMenu.createMenuRegistry({
+    placement: { a2: 'submenu', b1: 'main' },
+  });
+  reg.registerModule({
+    id: 'ws-only',
+    name: 'WS',
+    priority: 10,
+    zones: ['workspace'],
+    getItems: () => [
+      { id: 'a1', label: 'A1' },
+      { id: 'a2', label: 'A2' },
+    ],
+  });
+  reg.registerModule({
+    id: 'sb-only',
+    name: 'SB',
+    priority: 20,
+    zones: ['sidebar'],
+    getItems: () => [{ id: 's1', label: 'S1' }],
+  });
+  reg.registerModule({
+    id: 'footer',
+    name: 'Footer',
+    priority: 999,
+    zones: ['workspace'],
+    alwaysOn: true,
+    getItems: () => [{ id: 'ctx-open-settings', label: 'Settings' }],
+  });
+
+  const wsItems = reg.buildMenuItems({ zone: 'workspace' }, {});
+  const wsIds = wsItems.map((i) => (i.type === 'separator' ? '---' : i.id));
+  assert.deepStrictEqual(wsIds, ['a1', '---', 'more-actions-submenu', '---', 'ctx-open-settings']);
+  const moreItem = wsItems.find((i) => i.id === 'more-actions-submenu');
+  assert.strictEqual(moreItem.submenu.length, 1);
+  assert.strictEqual(moreItem.submenu[0].id, 'a2');
+
+  const sbItems = reg.buildMenuItems({ zone: 'sidebar' }, {});
+  assert.deepStrictEqual(sbItems.map((i) => i.id), ['s1']);
+});
+
 console.log(`All ${passed} tests passed!`);

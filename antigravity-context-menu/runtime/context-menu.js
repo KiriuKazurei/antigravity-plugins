@@ -595,6 +595,101 @@
     });
   }
 
+  // ==================== 菜单项折叠层级默认配置与纯逻辑 ====================
+
+  const DEFAULT_ITEM_PLACEMENT = {
+    'path-reveal-explorer': 'main',
+    'path-open-default': 'main',
+    'path-open-terminal': 'submenu',
+    'path-copy-submenu': 'submenu',
+    'cmd-send-terminal': 'main',
+    'cmd-run-terminal': 'main',
+    'cmd-run-external': 'submenu',
+    'link-open-browser': 'main',
+    'link-copy-url': 'submenu',
+    'link-copy-md': 'submenu',
+    'sel-quote-to-chat': 'main',
+    'sel-transform-submenu': 'submenu',
+    'eco-kb-clip': 'main',
+    'eco-snippets-save': 'main',
+  };
+
+  function moduleMatchesZone(zones, zone) {
+    if (!zone) return true;
+    const list = Array.isArray(zones) && zones.length > 0 ? zones : ['workspace'];
+    return list.includes('all') || list.includes(zone);
+  }
+
+  function applyPlacementFolding(items, placementMap) {
+    if (!Array.isArray(items) || items.length === 0) return [];
+    const map = placementMap && typeof placementMap === 'object' ? placementMap : {};
+    const mainItems = [];
+    const foldedItems = [];
+    const footerItems = [];
+
+    for (const item of items) {
+      if (!item) continue;
+      if (item.id === 'ctx-open-settings') {
+        footerItems.push(item);
+        continue;
+      }
+      if (item.type === 'separator' || item.type === 'header') {
+        mainItems.push(item);
+        continue;
+      }
+      if (item.id && map[item.id] === 'submenu') {
+        if (Array.isArray(item.submenu) && item.submenu.length > 0) {
+          if (foldedItems.length > 0 && foldedItems[foldedItems.length - 1].type !== 'separator') {
+            foldedItems.push({ type: 'separator' });
+          }
+          for (const sub of item.submenu) {
+            if (sub) foldedItems.push(sub);
+          }
+          foldedItems.push({ type: 'separator' });
+        } else {
+          foldedItems.push(item);
+        }
+      } else {
+        mainItems.push(item);
+      }
+    }
+
+    const cleanSep = (arr) => {
+      const out = [];
+      for (const it of arr) {
+        if (!it) continue;
+        if (it.type === 'separator') {
+          if (out.length === 0 || out[out.length - 1].type === 'separator') continue;
+          out.push(it);
+        } else {
+          out.push(it);
+        }
+      }
+      while (out.length > 0 && out[out.length - 1].type === 'separator') out.pop();
+      return out;
+    };
+
+    const cleanedMain = cleanSep(mainItems);
+    const cleanedFolded = cleanSep(foldedItems);
+
+    if (cleanedFolded.length > 0) {
+      if (cleanedMain.length > 0) cleanedMain.push({ type: 'separator' });
+      cleanedMain.push({
+        id: 'more-actions-submenu',
+        label: '更多操作',
+        icon: 'wand',
+        submenu: cleanedFolded,
+      });
+    }
+
+    if (footerItems.length > 0) {
+      if (cleanedMain.length > 0) cleanedMain.push({ type: 'separator' });
+      cleanedMain.push(...footerItems);
+    }
+
+    return cleanSep(cleanedMain);
+  }
+
   // ==================== 可拓展菜单注册中心 (Registry) ====================
 
   function createMenuRegistry(initialConfig) {
@@ -604,10 +699,16 @@
       version: 1,
       disabledModules: Array.isArray(initialConfig?.disabledModules) ? [...initialConfig.disabledModules] : [],
       customActions: Array.isArray(initialConfig?.customActions) ? [...initialConfig.customActions] : [],
+      placement: {
+        ...DEFAULT_ITEM_PLACEMENT,
+        ...(initialConfig?.placement && typeof initialConfig.placement === 'object' ? initialConfig.placement : {}),
+      },
       prefs: {
         openFolderDirectly: true,
         showPathPreview: false,
         enableOnInputs: true,
+        altClickOpenPath: false,
+        altClickSendCommand: false,
         ...(initialConfig?.prefs && typeof initialConfig.prefs === 'object' ? initialConfig.prefs : {}),
       },
     };
@@ -635,6 +736,7 @@
         name: String(def.name || def.id),
         description: String(def.description || ''),
         priority: typeof def.priority === 'number' ? def.priority : 100,
+        zones: Array.isArray(def.zones) && def.zones.length > 0 ? [...def.zones] : ['workspace'],
         builtin: Boolean(def.builtin),
         alwaysOn: Boolean(def.alwaysOn),
         getItems: def.getItems,
@@ -651,13 +753,17 @@
       if (!actionDef || typeof actionDef.id !== 'string' || typeof actionDef.label !== 'string') {
         throw new Error('Invalid action definition: requires id and label');
       }
-      const idx = externalActions.findIndex((a) => a.id === actionDef.id);
+      const normalized = {
+        ...actionDef,
+        zones: Array.isArray(actionDef.zones) && actionDef.zones.length > 0 ? [...actionDef.zones] : ['workspace'],
+      };
+      const idx = externalActions.findIndex((a) => a.id === normalized.id);
       if (idx !== -1) {
-        externalActions[idx] = actionDef;
+        externalActions[idx] = normalized;
       } else {
-        externalActions.push(actionDef);
+        externalActions.push(normalized);
       }
-      return actionDef.id;
+      return normalized.id;
     }
 
     function listModules() {
@@ -668,6 +774,7 @@
           name: m.name,
           description: m.description,
           priority: m.priority,
+          zones: m.zones,
           builtin: m.builtin,
           alwaysOn: m.alwaysOn,
           enabled: m.alwaysOn ? true : isModuleEnabled(m.id),
@@ -694,10 +801,14 @@
     }
 
     function buildMenuItems(ctx, helpers) {
+      const activeZone = (ctx && ctx.zone) || 'workspace';
       const sorted = Array.from(modules.values()).sort((a, b) => a.priority - b.priority);
       const result = [];
       for (const mod of sorted) {
         if (!mod.alwaysOn && !isModuleEnabled(mod.id)) {
+          continue;
+        }
+        if (!moduleMatchesZone(mod.zones, activeZone)) {
           continue;
         }
         try {
@@ -722,6 +833,7 @@
         const matched = [];
         for (const act of externalActions) {
           try {
+            if (!moduleMatchesZone(act.zones, activeZone)) continue;
             if (typeof act.when === 'function' && !act.when(ctx)) continue;
             matched.push({
               id: act.id,
@@ -741,7 +853,8 @@
         }
       }
 
-      return cleanSeparators(result);
+      const cleaned = cleanSeparators(result);
+      return applyPlacementFolding(cleaned, config.placement);
     }
 
     return {
@@ -773,6 +886,9 @@
       extractCommandFromText,
       convertNativeMenuItems,
       hasNativeCopyItem,
+      moduleMatchesZone,
+      applyPlacementFolding,
+      DEFAULT_ITEM_PLACEMENT,
       renderActionTemplate,
       createMenuRegistry,
     };
@@ -817,10 +933,13 @@
       version: 1,
       disabledModules: [],
       customActions: DEFAULT_CUSTOM_ACTIONS,
+      placement: { ...DEFAULT_ITEM_PLACEMENT },
       prefs: {
         openFolderDirectly: true,
         showPathPreview: false,
         enableOnInputs: true,
+        altClickOpenPath: false,
+        altClickSendCommand: false,
       },
     };
   }
@@ -861,6 +980,9 @@
           }
           if (Array.isArray(data.config.customActions) && data.config.customActions.length > 0) {
             registry.config.customActions = [...data.config.customActions];
+          }
+          if (data.config.placement && typeof data.config.placement === 'object') {
+            registry.config.placement = { ...registry.config.placement, ...data.config.placement };
           }
           if (data.config.prefs && typeof data.config.prefs === 'object') {
             registry.config.prefs = { ...registry.config.prefs, ...data.config.prefs };
@@ -1539,6 +1661,7 @@
       copyableText,
       pathInfo,
       inLeftSidebar,
+      zone: inLeftSidebar ? 'sidebar' : 'workspace',
       inInteractiveChrome,
       platform: plat,
       hasSysBridge: Boolean(sysBridge),
@@ -2013,18 +2136,132 @@
     },
   });
 
-  // 模块 5：用户自定义动作
+  // ==================== 跨插件生态检测与联动工具 ====================
+
+  function getActivePluginSet() {
+    const list =
+      (sysBridge && Array.isArray(sysBridge.activePlugins) && sysBridge.activePlugins) ||
+      (pluginMeta && Array.isArray(pluginMeta.activePlugins) && pluginMeta.activePlugins) ||
+      [];
+    return new Set(list);
+  }
+
+  function isKbPluginInstalled() {
+    const set = getActivePluginSet();
+    return set.has('antigravity-kb') || Boolean(document.getElementById('agy-kb-host')) || Boolean(window.__AGY_KB_BRIDGE__);
+  }
+
+  function isSnippetsPluginInstalled() {
+    const set = getActivePluginSet();
+    return set.has('antigravity-snippets') || Boolean(document.getElementById('agy-snippets-host'));
+  }
+
+  async function clipContentToKb(content, titleHint) {
+    const text = String(content || '').trim();
+    if (!text) return;
+    if (!sysBridge) {
+      await copyText(text);
+      showToast('未连接本地桥接，已复制到剪贴板', 'warn');
+      return;
+    }
+    const firstLine = text.split(/\r?\n/)[0].replace(/^[#>*`\s]+/, '').slice(0, 36).trim();
+    const title = titleHint || firstLine || `右键剪藏 ${new Date().toISOString().slice(0, 10)}`;
+    const res = await callSysBridge('/sys/kb-clip', { title, content: text });
+    if (res && res.ok) {
+      showToast(`已收藏到知识库：${res.relPath || title}`, 'ok');
+    } else {
+      showToast(`收藏到知识库失败：${(res && res.error) || '未知错误'}`, 'error');
+    }
+  }
+
+  function saveContentToSnippets(content) {
+    const text = String(content || '').trim();
+    if (!text) return;
+    const SNIPPETS_KEY = 'agy_snippets_store_v1';
+    try {
+      const raw = localStorage.getItem(SNIPPETS_KEY);
+      const parsed = raw ? JSON.parse(raw) : null;
+      const list = Array.isArray(parsed)
+        ? parsed
+        : (parsed && Array.isArray(parsed.snippets) ? parsed.snippets : []);
+      const firstLine = text.split(/\r?\n/)[0].replace(/^[#>*`\s]+/, '').slice(0, 28).trim();
+      const title = firstLine || `右键收藏模板 ${new Date().toISOString().slice(5, 16)}`;
+      const entry = {
+        id: `ctx-${Date.now().toString(36)}`,
+        title,
+        alias: '',
+        category: '右键收藏',
+        tags: ['收藏'],
+        content: text,
+        pinned: false,
+        useCount: 0,
+        builtin: false,
+        updatedAt: Date.now(),
+      };
+      if (parsed && !Array.isArray(parsed) && typeof parsed === 'object') {
+        parsed.snippets = [entry, ...list];
+        localStorage.setItem(SNIPPETS_KEY, JSON.stringify(parsed));
+      } else {
+        localStorage.setItem(SNIPPETS_KEY, JSON.stringify([entry, ...list]));
+      }
+      showToast(`已存为 Prompt 模板「${title}」，输入 # 即可检索`, 'ok');
+    } catch (_) {
+      void copyText(text);
+      showToast('保存模板失败，已复制到剪贴板', 'error');
+    }
+  }
+
+  // 模块 3.5：跨插件生态联动（检测到对应插件自动激活）
+  registry.registerModule({
+    id: 'plugin-ecosystem',
+    name: '插件生态联动 (KB / Snippets)',
+    description: '自动检测已安装的知识库 (antigravity-kb) 与模板库 (antigravity-snippets)，提供一键收藏与存为模板。',
+    priority: 35,
+    zones: ['workspace'],
+    builtin: true,
+    getItems(ctx) {
+      const items = [];
+      const clipText = ctx.selectionText || ctx.codeBlockText || ctx.inlineCodeText || (ctx.pathInfo ? ctx.pathInfo.path : '');
+      if (clipText && isKbPluginInstalled()) {
+        items.push({
+          id: 'eco-kb-clip',
+          label: '收藏到知识库 (KB)',
+          icon: 'archive',
+          onClick: () => void clipContentToKb(
+            ctx.codeBlockText && !ctx.selectionText ? `\`\`\`\n${ctx.codeBlockText}\n\`\`\`` : clipText,
+            ctx.pathInfo ? ctx.pathInfo.filename : ''
+          ),
+        });
+      }
+      const snippetText = ctx.selectionText || ctx.codeBlockText || '';
+      if (snippetText && isSnippetsPluginInstalled()) {
+        items.push({
+          id: 'eco-snippets-save',
+          label: '存为 Prompt 模板',
+          icon: 'star',
+          onClick: () => saveContentToSnippets(snippetText),
+        });
+      }
+      return items;
+    },
+  });
+
+  // 模块 5：用户自定义动作（支持按区域作用于主工作区 / 左侧栏 / 全部）
   registry.registerModule({
     id: 'custom-actions',
     name: '自定义扩展动作',
-    description: '运行你在设置面板中自定义的 Prompt 模板、复制模板或快捷搜索动作。',
+    description: '运行你在设置面板中自定义的 Prompt 模板、复制模板或快捷搜索动作，支持指定作用于主工作区或左侧边栏。',
     priority: 50,
+    zones: ['all'],
     builtin: true,
     getItems(ctx) {
       const list = Array.isArray(registry.config.customActions) ? registry.config.customActions : [];
+      const activeZone = ctx.zone || 'workspace';
       const items = [];
       for (const act of list) {
         if (!act || !act.label || !act.template) continue;
+        const actZone = act.zone || 'workspace';
+        if (actZone !== 'all' && actZone !== activeZone) continue;
         const when = act.when || 'always';
         if (when === 'hasPath' && !ctx.pathInfo) continue;
         if (when === 'hasSelection' && !ctx.selectionText) continue;
@@ -2452,6 +2689,96 @@
           display: flex;
           flex-direction: column;
           gap: 14px;
+          scrollbar-width: thin;
+          scrollbar-color: color-mix(in srgb, var(--fg) 18%, transparent) transparent;
+        }
+        .modal-body::-webkit-scrollbar { width: 6px; height: 6px; }
+        .modal-body::-webkit-scrollbar-track { background: transparent; }
+        .modal-body::-webkit-scrollbar-thumb {
+          background: color-mix(in srgb, var(--fg) 16%, transparent);
+          border-radius: 999px;
+        }
+        .modal-body::-webkit-scrollbar-thumb:hover {
+          background: color-mix(in srgb, var(--fg) 28%, transparent);
+        }
+        .switch {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+          width: 34px;
+          height: 19px;
+          flex-shrink: 0;
+          cursor: pointer;
+        }
+        .switch input {
+          opacity: 0;
+          width: 0;
+          height: 0;
+          position: absolute;
+        }
+        .switch-track {
+          position: absolute;
+          inset: 0;
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--fg) 16%, transparent);
+          border: 1px solid var(--border);
+          transition: background 0.16s ease, border-color 0.16s ease;
+        }
+        .switch-track::after {
+          content: '';
+          position: absolute;
+          top: 2px;
+          left: 2px;
+          width: 13px;
+          height: 13px;
+          border-radius: 50%;
+          background: var(--fg);
+          opacity: 0.85;
+          transition: transform 0.16s ease, background 0.16s ease, opacity 0.16s ease;
+        }
+        .switch input:checked + .switch-track {
+          background: var(--accent);
+          border-color: var(--accent);
+        }
+        .switch input:checked + .switch-track::after {
+          transform: translateX(15px);
+          background: var(--accent-fg);
+          opacity: 1;
+        }
+        .seg-group {
+          display: inline-flex;
+          border: 1px solid var(--border);
+          border-radius: 5px;
+          overflow: hidden;
+          flex-shrink: 0;
+          background: var(--bg);
+        }
+        .seg-btn {
+          border: none;
+          background: transparent;
+          color: var(--fg-muted);
+          padding: 3px 8px;
+          font-family: var(--font);
+          font-size: 11px;
+          cursor: pointer;
+          transition: background 0.1s ease, color 0.1s ease;
+        }
+        .seg-btn:hover { background: var(--bg-hover); color: var(--fg); }
+        .seg-btn.active {
+          background: var(--accent);
+          color: var(--accent-fg);
+        }
+        .zone-tag {
+          display: inline-block;
+          margin-left: 6px;
+          padding: 0 5px;
+          border-radius: 4px;
+          font-size: 10px;
+          font-weight: 500;
+          color: var(--fg-muted);
+          background: var(--bg);
+          border: 1px solid var(--sep);
+          vertical-align: middle;
         }
         .sec-title {
           font-size: 11px;
@@ -2812,6 +3139,34 @@
     if (modalContainer) modalContainer.innerHTML = '';
   }
 
+  const PLACEMENT_UI_SPECS = [
+    { id: 'path-reveal-explorer', label: '在资源管理器中打开', group: '路径' },
+    { id: 'path-open-default', label: '使用默认应用打开文件', group: '路径' },
+    { id: 'path-open-terminal', label: '在终端中打开所在目录', group: '路径' },
+    { id: 'path-copy-submenu', label: '复制路径变体（POSIX/目录/file://）', group: '路径' },
+    { id: 'cmd-send-terminal', label: '快捷输入到终端（当前终端）', group: '终端' },
+    { id: 'cmd-run-terminal', label: '输入并在终端运行（新建终端）', group: '终端' },
+    { id: 'cmd-run-external', label: '在外部终端中运行', group: '终端' },
+    { id: 'link-open-browser', label: '在浏览器中打开链接', group: '链接' },
+    { id: 'link-copy-url', label: '复制链接地址', group: '链接' },
+    { id: 'link-copy-md', label: '复制为 Markdown 链接', group: '链接' },
+    { id: 'sel-quote-to-chat', label: '引用到对话输入框', group: '选区' },
+    { id: 'sel-transform-submenu', label: '文本转换与工具（JSON/URL/Base64）', group: '选区' },
+    { id: 'eco-kb-clip', label: '收藏到知识库 (KB)', group: '生态联动', requires: 'kb' },
+    { id: 'eco-snippets-save', label: '存为 Prompt 模板 (Snippets)', group: '生态联动', requires: 'snippets' },
+  ];
+
+  function formatZonesLabel(zones) {
+    const list = Array.isArray(zones) && zones.length > 0 ? zones : ['workspace'];
+    if (list.includes('all') || (list.includes('workspace') && list.includes('sidebar'))) return '全部区域';
+    if (list.includes('sidebar')) return '左侧栏';
+    return '主工作区';
+  }
+
+  function renderSwitchHtml(id, checked) {
+    return `<label class="switch"><input type="checkbox" id="${id}" ${checked ? 'checked' : ''} /><span class="switch-track"></span></label>`;
+  }
+
   function openSettingsModal() {
     closeMenu();
     ensureShadowRoot();
@@ -2820,9 +3175,17 @@
     const render = () => {
       const mods = registry.listModules().filter((m) => !m.alwaysOn);
       const customActs = registry.config.customActions || [];
+      const kbReady = isKbPluginInstalled();
+      const snippetsReady = isSnippetsPluginInstalled();
       const bridgeStatus = sysBridge
         ? `已连接本地系统桥接 (v${pluginMeta.appVersion || 'host'})`
-        : '降级兼容模式（支持资源管理器定位；重启接入 v2.4.0 宿主可解锁直接打开文件与终端）';
+        : '降级兼容模式（重启接入最新宿主可解锁全部系统桥接能力）';
+
+      const visiblePlacementSpecs = PLACEMENT_UI_SPECS.filter((sp) => {
+        if (sp.requires === 'kb') return kbReady;
+        if (sp.requires === 'snippets') return snippetsReady;
+        return true;
+      });
 
       modalContainer.innerHTML = `
         <div class="modal-backdrop" id="backdrop">
@@ -2834,23 +3197,40 @@
             <div class="modal-body">
               <div class="hint">
                 运行状态：<strong>${bridgeStatus}</strong><br/>
-                提示：按住 <strong>Shift + 右键</strong> 可随时直达原生右键菜单；外部插件可通过 <code>window.__AGY_CONTEXT_MENU__</code> 注册新模块。
+                生态联动：知识库 (KB) <strong>${kbReady ? '已检测到' : '未安装'}</strong> · 模板库 (Snippets) <strong>${snippetsReady ? '已检测到' : '未安装'}</strong><br/>
+                提示：按住 <strong>Shift + 右键</strong> 可随时直达原版系统菜单；外部插件可通过 <code>window.__AGY_CONTEXT_MENU__</code> 注册带 <code>zones</code> 的模块。
               </div>
 
               <div>
-                <div class="sec-title">界面与行为偏好</div>
+                <div class="sec-title">界面偏好与「零右键」快捷操作</div>
                 <div class="card-list">
                   <div class="mod-row">
                     <div class="mod-info">
                       <div class="mod-name">显示顶部路径/命令预览头</div>
                       <div class="mod-desc">默认关闭以保持 Antigravity 原生极简菜单布局；开启后在菜单顶部显示路径与实时状态徽章。</div>
                     </div>
-                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;flex-shrink:0;">
-                      <input type="checkbox" id="pref-show-header" ${registry.config.prefs.showPathPreview === true ? 'checked' : ''} />
-                      <span style="font-size:12px;">${registry.config.prefs.showPathPreview === true ? '开启' : '关闭'}</span>
-                    </label>
+                    ${renderSwitchHtml('pref-show-header', registry.config.prefs.showPathPreview === true)}
+                  </div>
+                  <div class="mod-row">
+                    <div class="mod-info">
+                      <div class="mod-name">Alt + 左键点击路径直接打开资源管理器</div>
+                      <div class="mod-desc">默认关闭；开启后按住 Alt 单击主工作区中的路径或 file:// 链接即可一步打开资源管理器。</div>
+                    </div>
+                    ${renderSwitchHtml('pref-alt-path', registry.config.prefs.altClickOpenPath === true)}
+                  </div>
+                  <div class="mod-row">
+                    <div class="mod-info">
+                      <div class="mod-name">Alt + 左键点击标蓝命令直接输入终端</div>
+                      <div class="mod-desc">默认关闭；开启后按住 Alt 单击终端命令即可自动唤起当前终端并填入命令行。</div>
+                    </div>
+                    ${renderSwitchHtml('pref-alt-cmd', registry.config.prefs.altClickSendCommand === true)}
                   </div>
                 </div>
+              </div>
+
+              <div>
+                <div class="sec-title">菜单项层级配置（主层 / 折叠进「更多操作」子菜单）</div>
+                <div class="card-list" id="placement-list"></div>
               </div>
 
               <div>
@@ -2863,6 +3243,11 @@
                 <div class="card-list" id="custom-list"></div>
                 <div class="form-grid" style="margin-top:8px;">
                   <input class="input" id="act-label" placeholder="菜单项名称（如：用 Google 搜索）" />
+                  <select class="select" id="act-zone">
+                    <option value="workspace">作用区域：主工作区</option>
+                    <option value="sidebar">作用区域：左侧边栏</option>
+                    <option value="all">作用区域：全部区域</option>
+                  </select>
                   <select class="select" id="act-when">
                     <option value="hasSelection">触发条件：选中文本时</option>
                     <option value="hasPath">触发条件：右键路径时</option>
@@ -2874,8 +3259,8 @@
                     <option value="copy-template">动作：渲染模板并复制</option>
                     <option value="open-url">动作：在浏览器打开 URL</option>
                   </select>
-                  <button class="btn btn-primary" id="btn-add-act">+ 添加自定义动作</button>
                   <input class="input full-col" id="act-tpl" placeholder="模板（支持 {{selection}} {{selection_encoded}} {{path}} {{dir}} {{filename}} {{url}}）" />
+                  <button class="btn btn-primary full-col" id="btn-add-act">+ 添加自定义动作</button>
                 </div>
               </div>
             </div>
@@ -2883,13 +3268,41 @@
         </div>
       `;
 
-      const prefHeaderEl = modalContainer.querySelector('#pref-show-header');
-      if (prefHeaderEl) {
-        prefHeaderEl.addEventListener('change', (e) => {
-          registry.config.prefs.showPathPreview = Boolean(e.target.checked);
+      const bindPrefSwitch = (id, prefKey) => {
+        const el = modalContainer.querySelector(`#${id}`);
+        if (!el) return;
+        el.addEventListener('change', (e) => {
+          registry.config.prefs[prefKey] = Boolean(e.target.checked);
           saveLocalConfig(registry.config);
-          render();
         });
+      };
+      bindPrefSwitch('pref-show-header', 'showPathPreview');
+      bindPrefSwitch('pref-alt-path', 'altClickOpenPath');
+      bindPrefSwitch('pref-alt-cmd', 'altClickSendCommand');
+
+      const placementList = modalContainer.querySelector('#placement-list');
+      for (const sp of visiblePlacementSpecs) {
+        const cur = registry.config.placement[sp.id] === 'submenu' ? 'submenu' : 'main';
+        const row = document.createElement('div');
+        row.className = 'mod-row';
+        row.innerHTML = `
+          <div class="mod-info">
+            <div class="mod-name"></div>
+          </div>
+          <div class="seg-group">
+            <button type="button" class="seg-btn ${cur === 'main' ? 'active' : ''}" data-val="main">主层</button>
+            <button type="button" class="seg-btn ${cur === 'submenu' ? 'active' : ''}" data-val="submenu">子菜单</button>
+          </div>
+        `;
+        row.querySelector('.mod-name').innerHTML = `${sp.label}<span class="zone-tag">${sp.group}</span>`;
+        row.querySelectorAll('.seg-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            registry.config.placement[sp.id] = btn.getAttribute('data-val');
+            saveLocalConfig(registry.config);
+            render();
+          });
+        });
+        placementList.appendChild(row);
       }
 
       const modList = modalContainer.querySelector('#mod-list');
@@ -2901,17 +3314,21 @@
             <div class="mod-name"></div>
             <div class="mod-desc"></div>
           </div>
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;flex-shrink:0;">
+          <label class="switch">
             <input type="checkbox" ${m.enabled ? 'checked' : ''} />
-            <span style="font-size:12px;">${m.enabled ? '已启用' : '已停用'}</span>
+            <span class="switch-track"></span>
           </label>
         `;
-        row.querySelector('.mod-name').textContent = m.name;
+        const nameEl = row.querySelector('.mod-name');
+        nameEl.textContent = m.name;
+        const zTag = document.createElement('span');
+        zTag.className = 'zone-tag';
+        zTag.textContent = formatZonesLabel(m.zones);
+        nameEl.appendChild(zTag);
         row.querySelector('.mod-desc').textContent = m.description;
         row.querySelector('input').addEventListener('change', (e) => {
           registry.setModuleEnabled(m.id, e.target.checked);
           saveLocalConfig(registry.config);
-          render();
         });
         modList.appendChild(row);
       }
@@ -2920,7 +3337,7 @@
       if (customActs.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'hint';
-        empty.textContent = '暂无自定义动作，可在下方快速添加。';
+        empty.textContent = '暂无自定义动作，可在下方快速添加（支持主工作区或左侧边栏）。';
         customList.appendChild(empty);
       } else {
         for (const act of customActs) {
@@ -2933,7 +3350,13 @@
             </div>
             <button class="btn btn-danger">删除</button>
           `;
-          row.querySelector('.mod-name').textContent = act.label;
+          const actZoneLabel = act.zone === 'sidebar' ? '左侧栏' : act.zone === 'all' ? '全部区域' : '主工作区';
+          const nameEl = row.querySelector('.mod-name');
+          nameEl.textContent = act.label;
+          const zTag = document.createElement('span');
+          zTag.className = 'zone-tag';
+          zTag.textContent = actZoneLabel;
+          nameEl.appendChild(zTag);
           row.querySelector('.mod-desc').textContent = `[${act.type} / ${act.when}] ${act.template}`;
           row.querySelector('button').addEventListener('click', () => {
             registry.config.customActions = registry.config.customActions.filter((a) => a.id !== act.id);
@@ -2946,6 +3369,7 @@
 
       modalContainer.querySelector('#btn-add-act').addEventListener('click', () => {
         const label = modalContainer.querySelector('#act-label').value.trim();
+        const zone = modalContainer.querySelector('#act-zone').value;
         const when = modalContainer.querySelector('#act-when').value;
         const type = modalContainer.querySelector('#act-type').value;
         const template = modalContainer.querySelector('#act-tpl').value.trim();
@@ -2956,6 +3380,7 @@
         registry.config.customActions.push({
           id: `u-${Date.now().toString(36)}`,
           label,
+          zone,
           when,
           type,
           template,
@@ -3094,15 +3519,19 @@
         let finalItems = convertedNative;
 
         // 分区展示策略：
-        // 1. 左侧栏 / 顶栏 / 终端等原生控件区：纯粹展示原本菜单的全部选项（统一插件 UI 风格）
-        // 2. 主工作区：原本菜单选项置顶，分隔线后无缝拼接本插件的扩展功能
-        const isPureNativeZone = Boolean(
+        // 1. 左侧栏 (zone: 'sidebar')：顶部纯粹展示全部中文原生选项；若有声明了 sidebar/all 的扩展模块或自定义动作，则在分隔线下方优雅追加！
+        // 2. 主工作区 (zone: 'workspace')：原生选项置顶（自动去重），分隔线下方无缝拼接所有主工作区扩展模块（并应用主层/子菜单折叠）
+        const isPureChromeWithoutExt = Boolean(
           !freshCtx ||
-          freshCtx.inLeftSidebar ||
-          (freshCtx.inInteractiveChrome && !freshCtx.pathInfo && !freshCtx.commandInfo && !freshCtx.inlineCodeText && !freshCtx.selectionText)
+          (!freshCtx.inLeftSidebar &&
+            freshCtx.inInteractiveChrome &&
+            !freshCtx.pathInfo &&
+            !freshCtx.commandInfo &&
+            !freshCtx.inlineCodeText &&
+            !freshCtx.selectionText)
         );
 
-        if (!isPureNativeZone && freshCtx) {
+        if (!isPureChromeWithoutExt && freshCtx) {
           const mergedCtx = {
             ...freshCtx,
             hasNativeCopy: hasNativeCopyItem(nativeItems),
@@ -3119,7 +3548,7 @@
         }
 
         const shown = renderMenuItemsList(finalItems, posX, posY, {
-          ctx: isPureNativeZone ? null : freshCtx,
+          ctx: isPureChromeWithoutExt || freshCtx?.inLeftSidebar ? null : freshCtx,
           onDismiss: () => finish(null),
         });
         if (!shown) {
@@ -3192,6 +3621,39 @@
       }
     },
     false
+  );
+
+  // 「零右键」Alt + 左键修饰键直达（管理页提供独立滑块开关，默认关闭）
+  window.addEventListener(
+    'click',
+    (event) => {
+      try {
+        if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) {
+          return;
+        }
+        const openPathOn = registry.config.prefs.altClickOpenPath === true;
+        const sendCmdOn = registry.config.prefs.altClickSendCommand === true;
+        if (!openPathOn && !sendCmdOn) return;
+        if (event.target && event.target.closest && event.target.closest(`#${HOST_ID}`)) {
+          return;
+        }
+        const ctx = extractContextFromEvent(event);
+        if (ctx.inLeftSidebar) return;
+
+        if (openPathOn && ctx.pathInfo) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          void revealPathInExplorer(ctx.pathInfo);
+          return;
+        }
+        if (sendCmdOn && ctx.commandInfo) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          void sendCommandToTerminal(ctx.commandInfo, { autoExecute: false, preferNew: false });
+        }
+      } catch (_) {}
+    },
+    true
   );
 
   window.addEventListener(
