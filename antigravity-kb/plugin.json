@@ -1,9 +1,12 @@
 {
   "name": "antigravity-kb",
   "displayName": "Antigravity 轻量化 Markdown 知识库",
-  "version": "2.0.0",
-  "description": "面向 Antigravity 的本地真实 .md 知识库 MCP App 插件：原生右侧边栏与全局视图浏览/编辑/实时预览、[[双向链接]] 与 #标签检索，并自带 MCP 工具让 AI 直接检索与沉淀知识。",
+  "version": "2.1.0",
+  "description": "面向 Antigravity 的本地秒开 Markdown 知识库插件：右侧边栏即时标签页、[[ 快捷引用、双链与标签检索，同时提供 MCP 工具与待命 MCP App 资源。",
   "author": "Antigravity Community",
+  "uiScripts": [
+    "runtime/kb.js"
+  ],
   "suggestedPrompts": [
     "帮我检索知识库里关于当前问题的笔记",
     "把刚才排查出的根因与解决方案沉淀到我的知识库里",

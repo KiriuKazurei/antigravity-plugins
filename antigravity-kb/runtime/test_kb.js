@@ -10,6 +10,7 @@ const fs = require('fs');
 const Module = require('module');
 const os = require('os');
 const path = require('path');
+const vm = require('vm');
 
 const kb = require('./kb.js');
 
@@ -217,7 +218,10 @@ function testMcpServerEndToEnd() {
     const byId = new Map(lines.map((m) => [m.id, m]));
 
     assert.strictEqual(byId.get(1).result.serverInfo.name, 'antigravity-kb');
-    assert.strictEqual(byId.get(2).result.tools.length, 5);
+    const toolNames = byId.get(2).result.tools.map((t) => t.name);
+    for (const reqTool of ['kb_list', 'kb_search', 'kb_read', 'kb_write', 'kb_append']) {
+      assert(toolNames.includes(reqTool), `kb_mcp.py must expose ${reqTool}`);
+    }
     assert.strictEqual(byId.get(3).result.isError, false);
 
     const searchPayload = JSON.parse(byId.get(6).result.content[0].text);
@@ -236,8 +240,168 @@ function testMcpServerEndToEnd() {
   }
 }
 
+function testEmptyRightPaneVirtualTabAndSidebarDock() {
+  const code = fs.readFileSync(path.join(__dirname, 'kb.js'), 'utf8');
+  function makeEl(tag) {
+    const el = {
+      tagName: String(tag || 'div').toUpperCase(),
+      nodeType: 1,
+      id: '',
+      className: '',
+      textContent: '',
+      style: { cssText: '', setProperty(k, v) { this[k] = v; }, removeProperty(k) { delete this[k]; } },
+      dataset: {},
+      attributes: {},
+      children: [],
+      listeners: {},
+      parentElement: null,
+      get parentNode() { return this.parentElement; },
+      classList: {
+        toggle(cls, force) {
+          const set = new Set(String(el.className || '').split(/\s+/).filter(Boolean));
+          if (force === undefined) {
+            if (set.has(cls)) set.delete(cls);
+            else set.add(cls);
+          } else if (force) set.add(cls);
+          else set.delete(cls);
+          el.className = Array.from(set).join(' ');
+        },
+        add(cls) { this.toggle(cls, true); },
+        remove(cls) { this.toggle(cls, false); },
+      },
+      setAttribute(k, v) { this.attributes[k] = String(v); if (k === 'id') this.id = String(v); },
+      getAttribute(k) { return this.attributes[k] ?? null; },
+      attachShadow() {
+        const sr = makeEl('shadow-root');
+        sr.host = this;
+        this.shadowRoot = sr;
+        return sr;
+      },
+      appendChild(c) { c.parentElement = this; this.children.push(c); return c; },
+      insertBefore(c) { c.parentElement = this; this.children.unshift(c); return c; },
+      removeChild(c) { this.children = this.children.filter((x) => x !== c); c.parentElement = null; },
+      contains(n) { return n === this || this.children.some((c) => c === n || (c.contains && c.contains(n))); },
+      closest(sel) {
+        let cur = this;
+        const ids = sel.split(',').map((s) => s.trim()).filter((s) => s.startsWith('#')).map((s) => s.slice(1));
+        while (cur) {
+          if (ids.includes(cur.id)) return cur;
+          cur = cur.parentElement;
+        }
+        return null;
+      },
+      addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); },
+      getBoundingClientRect() { return this._rect || { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
+      querySelectorAll(sel) {
+        const parts = String(sel || '').split(',').map((s) => s.trim()).filter(Boolean);
+        const out = [];
+        const walk = (n) => {
+          for (const c of n.children || []) {
+            const matched = parts.some((p) => {
+              if (p.startsWith('.')) return String(c.className || '').split(/\s+/).includes(p.slice(1));
+              if (p.startsWith('#')) return c.id === p.slice(1);
+              if (/^[a-z0-9]+$/i.test(p)) return c.tagName.toLowerCase() === p.toLowerCase();
+              return false;
+            });
+            if (matched) out.push(c);
+            walk(c);
+          }
+        };
+        walk(this);
+        return out;
+      },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      getElementById(id) {
+        const walk = (n) => {
+          for (const c of n.children || []) {
+            if (c.id === id) return c;
+            const r = walk(c);
+            if (r) return r;
+          }
+          return null;
+        };
+        return walk(this);
+      },
+      set innerHTML(v) { if (v === '') this.children = []; },
+    };
+    return el;
+  }
+
+  const body = makeEl('body');
+  const sidebar = makeEl('div');
+  sidebar._rect = { left: 0, top: 0, right: 242, bottom: 800, width: 242, height: 800 };
+  const custBtn = makeEl('button');
+  custBtn.textContent = '自定义配置';
+  custBtn._rect = { left: 10, top: 112, right: 230, bottom: 144, width: 220, height: 32 };
+  const projectsHdr = makeEl('div');
+  projectsHdr.textContent = '项目';
+  projectsHdr._rect = { left: 12, top: 180, right: 92, bottom: 198, width: 80, height: 18 };
+  sidebar.appendChild(custBtn);
+  sidebar.appendChild(projectsHdr);
+  body.appendChild(sidebar);
+
+  const splitRoot = makeEl('div');
+  const chatCol = makeEl('div');
+  const composer = makeEl('textarea');
+  composer._rect = { left: 260, top: 680, right: 720, bottom: 760, width: 460, height: 80 };
+  chatCol.appendChild(composer);
+  const rightPane = makeEl('div');
+  rightPane._rect = { left: 740, top: 36, right: 1280, bottom: 800, width: 540, height: 764 };
+  splitRoot.appendChild(chatCol);
+  splitRoot.appendChild(rightPane);
+  body.appendChild(splitRoot);
+
+  const doc = {
+    readyState: 'complete',
+    body,
+    head: makeEl('head'),
+    documentElement: { lang: 'zh-CN' },
+    createElement: (t) => makeEl(t),
+    createElementNS: (_, t) => makeEl(t),
+    getElementById: (id) => body.getElementById(id),
+    querySelectorAll: (sel) => body.querySelectorAll(sel),
+    elementFromPoint: () => custBtn,
+    addEventListener() {},
+  };
+
+  const ctx = vm.createContext({
+    document: doc,
+    innerWidth: 1280,
+    innerHeight: 800,
+    navigator: { language: 'zh-CN', platform: 'Win32' },
+    getComputedStyle: () => ({ backgroundColor: 'rgb(20, 20, 22)', borderRadius: '10px', marginTop: '0px', fontSize: '13px', fontWeight: '500', paddingLeft: '10px' }),
+    addEventListener() {},
+    dispatchEvent() {},
+    CustomEvent: function (t, init) { this.type = t; this.detail = init && init.detail; },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    console,
+    Date,
+    Map,
+    Set,
+  });
+  ctx.window = ctx;
+  vm.runInContext(code, ctx, { filename: 'kb.js' });
+
+  // 1. 统一左侧栏基座应自动挂载并注册「知识库」
+  assert(ctx.__AGY_SIDEBAR_DOCK__, 'KB must initialize or join unified sidebar dock');
+  assert(ctx.__AGY_SIDEBAR_DOCK__._items.has('antigravity-kb'), 'KB must register into unified sidebar dock');
+  const dockHost = doc.getElementById('agy-sidebar-plugins-dock');
+  assert(dockHost && dockHost.shadowRoot, 'Unified sidebar dock host must exist');
+
+  // 2. 在 0 原生标签的空右侧栏打开知识库 -> 应在顶栏渲染虚拟标签条 .vtab-bar
+  const api = ctx.__AGY_KB_TEST_API__;
+  api.openKbInPane(false);
+  const kbHost = doc.getElementById('agy-kb-host');
+  const vTabBar = kbHost.shadowRoot.querySelector('.vtab-bar');
+  assert(vTabBar && !vTabBar.className.includes('hidden'), 'KB must show seamless .vtab-bar in empty right pane');
+  assert.strictEqual(vTabBar.style.left, '752px');
+  assert.strictEqual(vTabBar.style.top, '44px');
+}
+
 testMarkdownHelpers();
 testWikiTriggerAndComposer();
 testPluginLoaderKbBridge();
 testMcpServerEndToEnd();
+testEmptyRightPaneVirtualTabAndSidebarDock();
 console.log('antigravity-kb tests passed!');

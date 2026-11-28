@@ -270,11 +270,6 @@ TOOLS = [
         },
         "_meta": {
             "ui": {"resourceUri": SNIPPETS_APP_URI},
-            "com.google.antigravity/ui": {
-                "entrypoints": [
-                    {"type": "global", "title": "模板库"},
-                ]
-            },
         },
     },
     {

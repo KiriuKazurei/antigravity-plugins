@@ -2090,8 +2090,9 @@
 
   function render() {
     state.isDark = detectThemeIsDark();
-    // 「远程推送」入口已迁移至左侧栏原生「插件」分组 (MCP App global entrypoint)，不再向左侧栏注入 DOM 按钮或修改 marginTop
-    state.sidebarGeo = { visible: false };
+    // 使用统一左侧栏「插件」基座几何信息，不再单独向左侧栏注入重复按钮
+    const dock = window.__AGY_SIDEBAR_DOCK__;
+    state.sidebarGeo = dock && typeof dock.getGeometry === 'function' ? dock.getGeometry() : { visible: false };
     const sr = getShadowRoot();
     const root = cardRefs.root;
     if (!sr || !root) return;
@@ -2244,15 +2245,26 @@
     if (state.toast) {
       root.appendChild(el('div', { className: 'toast', textContent: state.toast }));
     }
+    if (dock && typeof dock.refresh === 'function') {
+      dock.refresh();
+    }
   }
 
-  // 点击左侧边栏其他原生导航/对话项时，自动退出独立界面
+  // 点击左侧边栏其他原生导航/对话项或其它插件时，自动退出独立界面
+  window.addEventListener('agy-sidebar-plugin-activated', (ev) => {
+    const activeId = ev && ev.detail ? ev.detail.id : '';
+    if (activeId && activeId !== 'antigravity-notifier' && state.modalOpen) {
+      state.modalOpen = false;
+      render();
+    }
+  });
+
   document.addEventListener(
     'click',
     (e) => {
       if (!state.modalOpen) return;
       const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
-      if (path.some((n) => n && n.id === HOST_ID)) return;
+      if (path.some((n) => n && (n.id === HOST_ID || n.id === 'agy-sidebar-plugins-dock'))) return;
       const btn = e.target && e.target.closest ? e.target.closest('button, a, [role="button"]') : null;
       if (btn && state.sidebarGeo && state.sidebarGeo.visible) {
         const r = btn.getBoundingClientRect ? btn.getBoundingClientRect() : null;
@@ -2269,10 +2281,9 @@
     'resize',
     () => {
       if (state.modalOpen) {
-        // 原生左侧栏入口已由 MCP App 接管，不再轮询或修改左侧栏 DOM 几何
-      const nextGeo = { visible: false };
+        const dock = window.__AGY_SIDEBAR_DOCK__;
+        const nextGeo = dock && typeof dock.getGeometry === 'function' ? dock.getGeometry() : { visible: false };
         state.sidebarGeo = nextGeo;
-        renderSidebarEntryOnly(nextGeo);
         const page = shadowRootRef?.getElementById('agy-notifier-standalone');
         if (page && nextGeo.visible && page.className === 'standalone-page') {
           page.style.left = `${nextGeo.sidebarRight}px`;
@@ -2314,80 +2325,311 @@
     true
   );
 
-  function normalizeLeftSidebarPluginsGap() {
-    try {
-      if (typeof document === 'undefined' || !document.querySelectorAll) return;
-      const btns = document.querySelectorAll('button, a, [role="button"]');
-      let custBtn = null;
-      let custRect = null;
-      for (let i = 0; i < btns.length; i++) {
-        const b = btns[i];
-        if (!b || (b.closest && b.closest(`#${HOST_ID}`))) continue;
-        const txt = (b.textContent || '').trim();
-        if (!/^(Customizations|自定义配置|自定义)$/i.test(txt)) continue;
-        const r = b.getBoundingClientRect();
-        if (r.left >= 0 && r.left < 240 && r.top > 30 && r.top < 360 && r.width > 40 && r.height > 16) {
-          custBtn = b;
-          custRect = r;
-          break;
-        }
-      }
-      if (!custBtn || !custRect) return;
+  function ensureAgySidebarDock() {
+    if (typeof window === 'undefined' || typeof document === 'undefined' || !document.body || !document.createElement) return null;
+    const DOCK_VERSION = 1;
+    if (window.__AGY_SIDEBAR_DOCK__ && window.__AGY_SIDEBAR_DOCK__.version >= DOCK_VERSION) return window.__AGY_SIDEBAR_DOCK__;
+    const DOCK_HOST_ID = 'agy-sidebar-plugins-dock';
+    const items = window.__AGY_SIDEBAR_DOCK__ && window.__AGY_SIDEBAR_DOCK__._items instanceof Map ? window.__AGY_SIDEBAR_DOCK__._items : new Map();
+    let lastGeo = { visible: false };
+    let syncTimer = null;
+    let shiftedBlock = null;
+    let dockHostEl = null;
+    let shadowRef = null;
+    let containerEl = null;
 
-      const nodes = document.querySelectorAll('div, span, button, h2, h3, p');
-      let plugNode = null;
-      let plugRect = null;
-      for (let i = 0; i < nodes.length; i++) {
-        const n = nodes[i];
-        if (!n || (n.closest && n.closest(`#${HOST_ID}`))) continue;
-        const txt = (n.textContent || '').trim();
-        if (!/^(Plugins|插件)$/i.test(txt)) continue;
-        const r = n.getBoundingClientRect();
-        if (r.left >= 0 && r.left < 240 && r.top > custRect.bottom && r.top < custRect.bottom + 120 && r.height > 8 && r.height < 40) {
-          plugNode = n;
-          plugRect = r;
-          break;
-        }
+    function isInsideAnyHost(node) {
+      if (!node || !node.closest) return false;
+      return Boolean(node.closest('#agy-sidebar-plugins-dock, #agy-kb-host, #agy-context-doctor-host, #agy-usage-dashboard-host, #agy-snippets-host, #agy-notifier-host'));
+    }
+    function detectDark() {
+      try {
+        const bg = window.getComputedStyle(document.body).backgroundColor;
+        const m = bg && bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+        if (m) return (0.299 * Number(m[1]) + 0.587 * Number(m[2]) + 0.114 * Number(m[3])) / 255 < 0.5;
+      } catch (_) {}
+      return true;
+    }
+    function makeIconSvg(kind, size) {
+      const sz = Number(size) || 15;
+      if (typeof document.createElementNS !== 'function') {
+        const sp = document.createElement('span');
+        sp.textContent = kind === 'book' ? '📖' : kind === 'bell' ? '🔔' : kind === 'hash' ? '#' : '🧩';
+        return sp;
       }
-      if (!plugNode || !plugRect) return;
-
-      let pBlock = plugNode;
-      while (
-        pBlock &&
-        pBlock.parentElement &&
-        pBlock.parentElement !== document.body &&
-        typeof pBlock.parentElement.contains === 'function' &&
-        !pBlock.parentElement.contains(custBtn)
-      ) {
-        pBlock = pBlock.parentElement;
+      const ns = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('width', String(sz));
+      svg.setAttribute('height', String(sz));
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor');
+      svg.setAttribute('stroke-width', '1.75');
+      svg.setAttribute('stroke-linecap', 'round');
+      svg.setAttribute('stroke-linejoin', 'round');
+      svg.style.flexShrink = '0';
+      svg.style.opacity = '0.88';
+      const addPath = (d) => { const p = document.createElementNS(ns, 'path'); p.setAttribute('d', d); svg.appendChild(p); };
+      if (kind === 'book') addPath('M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20');
+      else if (kind === 'bell') { addPath('M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9'); addPath('M13.73 21a2 2 0 0 1-3.46 0'); }
+      else if (kind === 'hash') { addPath('M4 9h16'); addPath('M4 15h16'); addPath('M10 3L8 21'); addPath('M16 3l-2 18'); }
+      else addPath('M12 2L15 8L21 9L16.5 14L18 20L12 17L6 20L7.5 14L3 9L9 8Z');
+      return svg;
+    }
+    function ensureDom() {
+      if (dockHostEl && shadowRef && containerEl) return true;
+      dockHostEl = document.getElementById(DOCK_HOST_ID);
+      if (!dockHostEl) {
+        dockHostEl = document.createElement('div');
+        dockHostEl.id = DOCK_HOST_ID;
+        dockHostEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147482900;';
+        document.body.appendChild(dockHostEl);
       }
-      if (!pBlock || !pBlock.style) return;
-
-      const targetGap = 14;
-      const curGap = plugRect.top - custRect.bottom;
-      if (pBlock.dataset && pBlock.dataset.agyGapAdjusted === '1') {
-        if (curGap >= targetGap - 3 && curGap <= targetGap + 5) return;
-      }
-      if (curGap <= targetGap + 4) return;
-
-      let baseMt = 0;
-      if (pBlock.dataset && pBlock.dataset.agyGapBaseMt !== undefined) {
-        baseMt = parseFloat(pBlock.dataset.agyGapBaseMt) || 0;
+      shadowRef = dockHostEl.shadowRoot || (dockHostEl.attachShadow ? dockHostEl.attachShadow({ mode: 'open' }) : dockHostEl);
+      const existingRoot = typeof shadowRef.getElementById === 'function' ? shadowRef.getElementById('agy-dock-root') : null;
+      if (!existingRoot) {
+        shadowRef.innerHTML = '';
+        const st = document.createElement('style');
+        st.textContent = `
+          :host { all: initial; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+          .dock { position: fixed; display: flex; flex-direction: column; pointer-events: auto; box-sizing: border-box; }
+          .dock.hidden { display: none; }
+          .dock-head { display: flex; align-items: center; height: 22px; margin-bottom: 4px; font-size: 12px; font-weight: 500; user-select: none; letter-spacing: 0.01em; color: rgba(161, 161, 170, 0.88); }
+          .dock.light .dock-head { color: rgba(100, 116, 139, 0.9); }
+          .dock-list { display: flex; flex-direction: column; gap: 2px; }
+          .dock-item { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; border-radius: 8px; background: transparent; color: #d4d4d8; font-family: inherit; cursor: pointer; box-sizing: border-box; text-align: left; padding-right: 10px; transition: background 0.12s ease, color 0.12s ease; }
+          .dock.light .dock-item { color: #334155; }
+          .dock-item:hover { background: rgba(255, 255, 255, 0.06); color: #f4f4f5; }
+          .dock.light .dock-item:hover { background: rgba(15, 23, 42, 0.06); color: #0f172a; }
+          .dock-item.active { background: rgba(255, 255, 255, 0.1); color: #ffffff; }
+          .dock.light .dock-item.active { background: rgba(15, 23, 42, 0.09); color: #0f172a; }
+          .dock-left { display: inline-flex; align-items: center; min-width: 0; overflow: hidden; }
+          .dock-lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .dock-dot { width: 7px; height: 7px; border-radius: 999px; flex-shrink: 0; background: #71717a; }
+          .dock-dot.running { background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18); }
+          .dock-dot.waiting { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.22); }
+          .dock-dot.dnd { background: #52525b; opacity: 0.6; }
+        `;
+        shadowRef.appendChild(st);
+        containerEl = document.createElement('div');
+        containerEl.id = 'agy-dock-root';
+        containerEl.className = 'dock hidden';
+        shadowRef.appendChild(containerEl);
       } else {
-        baseMt = parseFloat(window.getComputedStyle(pBlock).marginTop) || 0;
-        if (pBlock.dataset) pBlock.dataset.agyGapBaseMt = String(baseMt);
+        containerEl = existingRoot;
       }
-      const curApplied = pBlock.dataset && pBlock.dataset.agyGapDelta ? parseFloat(pBlock.dataset.agyGapDelta) || 0 : 0;
-      const delta = Math.max(0, Math.min(32, Math.round(curApplied + (curGap - targetGap))));
-      if (pBlock.dataset) {
-        pBlock.dataset.agyGapDelta = String(delta);
-        pBlock.dataset.agyGapAdjusted = '1';
+      return Boolean(containerEl);
+    }
+    function resetShiftedBlock() {
+      if (shiftedBlock && shiftedBlock.style && shiftedBlock.dataset && shiftedBlock.dataset.agyDockBaseMt !== undefined) {
+        try {
+          shiftedBlock.style.marginTop = `${parseFloat(shiftedBlock.dataset.agyDockBaseMt) || 0}px`;
+          shiftedBlock.dataset.agyDockShift = '0';
+        } catch (_) {}
       }
-      pBlock.style.marginTop = `${baseMt - delta}px`;
-    } catch (_) {}
+    }
+    function syncNow() {
+      syncTimer = null;
+      if (!ensureDom()) return;
+      const list = Array.from(items.values()).sort((a, b) => (a.order || 50) - (b.order || 50));
+      if (list.length === 0 || typeof document.querySelectorAll !== 'function') {
+        containerEl.className = 'dock hidden';
+        lastGeo = { visible: false };
+        resetShiftedBlock();
+        return;
+      }
+      const innerH = window.innerHeight || 800;
+      const candidates = document.querySelectorAll('button, a, [role="button"]');
+      let anchorBtn = null;
+      let anchorRect = null;
+      let anchorLabel = '';
+      for (let i = 0; i < candidates.length; i++) {
+        const node = candidates[i];
+        if (!node || typeof node.getBoundingClientRect !== 'function' || isInsideAnyHost(node)) continue;
+        const txt = (node.textContent || '').trim();
+        const aria = (node.getAttribute && (node.getAttribute('aria-label') || node.getAttribute('title'))) || '';
+        const lbl = txt || aria.trim();
+        if (!/^(Customizations|自定义配置|自定义)$/i.test(lbl)) continue;
+        const r = node.getBoundingClientRect();
+        if (r.width >= 60 && r.height >= 16 && r.height <= 48 && r.left >= 0 && r.left < 320 && r.top >= 20 && r.top < 320) {
+          anchorBtn = node; anchorRect = r; anchorLabel = lbl; break;
+        }
+      }
+      if (!anchorBtn || !anchorRect) { containerEl.className = 'dock hidden'; lastGeo = { visible: false }; return; }
+      let sidebarEl = null;
+      let sidebarRect = null;
+      let cur = anchorBtn.parentElement;
+      for (let depth = 0; cur && depth < 12; depth++) {
+        if (typeof cur.getBoundingClientRect === 'function') {
+          const cr = cur.getBoundingClientRect();
+          if (cr.width >= 150 && cr.width <= 420 && cr.height >= innerH * 0.45 && cr.left <= 24) {
+            sidebarEl = cur; sidebarRect = cr; break;
+          }
+        }
+        cur = cur.parentElement;
+      }
+      if (typeof document.elementFromPoint === 'function') {
+        const hit = document.elementFromPoint(anchorRect.left + Math.min(24, anchorRect.width / 2), anchorRect.top + anchorRect.height / 2);
+        if (hit && hit !== anchorBtn && !(anchorBtn.contains && anchorBtn.contains(hit)) && !(sidebarEl && sidebarEl.contains && sidebarEl.contains(hit)) && !isInsideAnyHost(hit)) {
+          containerEl.className = 'dock hidden'; lastGeo = { visible: false }; return;
+        }
+      }
+      const rowH = Math.round(anchorRect.height || 30);
+      const rowGap = 2;
+      const headerH = 22;
+      const headerGap = 4;
+      const topGap = 14;
+      const bottomGap = 14;
+      const dockLeft = Math.round(anchorRect.left);
+      const dockWidth = Math.round(anchorRect.width);
+      const dockTop = Math.round(anchorRect.bottom + topGap);
+      const dockHeight = headerH + headerGap + list.length * rowH + Math.max(0, list.length - 1) * rowGap;
+      const dockBottom = dockTop + dockHeight;
+      const scope = sidebarEl || document;
+      let nextSectionNode = null;
+      let nextSectionTop = Infinity;
+      if (scope && typeof scope.querySelectorAll === 'function') {
+        const nodes = scope.querySelectorAll('div, span, button, h2, h3, p');
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
+          if (!n || typeof n.getBoundingClientRect !== 'function' || isInsideAnyHost(n)) continue;
+          const txt = (n.textContent || '').trim();
+          if (!/^(Plugins|插件|Projects|项目)$/i.test(txt)) continue;
+          const nr = n.getBoundingClientRect();
+          if (nr.top > anchorRect.bottom - 10 && nr.top < innerH - 16 && nr.left < 280 && nr.height > 8 && nr.height < 44 && nr.top < nextSectionTop) {
+            nextSectionNode = n; nextSectionTop = nr.top;
+          }
+        }
+      }
+      if (nextSectionNode && Number.isFinite(nextSectionTop)) {
+        try {
+          let pBlock = nextSectionNode;
+          while (pBlock && pBlock.parentElement && pBlock.parentElement !== document.body && pBlock.parentElement !== sidebarEl && typeof pBlock.parentElement.contains === 'function' && !pBlock.parentElement.contains(anchorBtn)) {
+            pBlock = pBlock.parentElement;
+          }
+          if (pBlock && pBlock.style) {
+            shiftedBlock = pBlock;
+            let baseMt = 0;
+            if (pBlock.dataset && pBlock.dataset.agyDockBaseMt !== undefined) baseMt = parseFloat(pBlock.dataset.agyDockBaseMt) || 0;
+            else {
+              try { baseMt = parseFloat(window.getComputedStyle(pBlock).marginTop) || 0; } catch (_) {}
+              if (pBlock.dataset) pBlock.dataset.agyDockBaseMt = String(baseMt);
+            }
+            const curApplied = pBlock.dataset && pBlock.dataset.agyDockShift ? parseFloat(pBlock.dataset.agyDockShift) || 0 : 0;
+            const delta = Math.round(dockBottom + bottomGap - nextSectionTop);
+            if (Math.abs(delta) >= 2) {
+              const nextShift = Math.max(-40, Math.min(280, curApplied + delta));
+              if (nextShift !== curApplied) {
+                if (pBlock.dataset) pBlock.dataset.agyDockShift = String(nextShift);
+                pBlock.style.marginTop = `${baseMt + nextShift}px`;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      let fontSize = '13px', fontWeight = '500', paddingLeft = '10px', color = '', iconSize = 15, iconGap = 10;
+      try {
+        const cs = window.getComputedStyle(anchorBtn);
+        if (cs) {
+          if (cs.fontSize) fontSize = cs.fontSize;
+          if (cs.fontWeight) fontWeight = cs.fontWeight;
+          if (cs.paddingLeft) paddingLeft = cs.paddingLeft;
+          if (cs.color) color = cs.color;
+          if (cs.columnGap && parseFloat(cs.columnGap) > 0) iconGap = Math.round(parseFloat(cs.columnGap));
+          else if (cs.gap && parseFloat(cs.gap) > 0) iconGap = Math.round(parseFloat(cs.gap));
+        }
+        const svg = typeof anchorBtn.querySelector === 'function' ? anchorBtn.querySelector('svg') : null;
+        if (svg && typeof svg.getBoundingClientRect === 'function') {
+          const sr = svg.getBoundingClientRect();
+          if (sr.width >= 12 && sr.width <= 20) iconSize = Math.round(sr.width);
+          if (sr.left > anchorRect.left) paddingLeft = `${Math.round(sr.left - anchorRect.left)}px`;
+        }
+      } catch (_) {}
+      const isDark = detectDark();
+      const isZh = Boolean(window.__AGY_I18N_ACTIVE__) || /自定义/.test(anchorLabel);
+      const sidebarRight = sidebarRect ? Math.round(sidebarRect.right) : Math.round(anchorRect.right + 12);
+      lastGeo = { visible: true, left: dockLeft, top: dockTop, width: dockWidth, height: dockHeight, sidebarRight, isDark, isZh };
+      containerEl.className = `dock ${isDark ? 'dark' : 'light'}`;
+      containerEl.style.left = `${dockLeft}px`;
+      containerEl.style.top = `${dockTop}px`;
+      containerEl.style.width = `${dockWidth}px`;
+      containerEl.innerHTML = '';
+      const head = document.createElement('div');
+      head.className = 'dock-head';
+      head.style.paddingLeft = paddingLeft;
+      head.textContent = isZh ? '插件' : 'Plugins';
+      containerEl.appendChild(head);
+      const listEl = document.createElement('div');
+      listEl.className = 'dock-list';
+      for (const item of list) {
+        const active = typeof item.isActive === 'function' ? Boolean(item.isActive()) : false;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('data-dock-plugin-id', item.id);
+        btn.className = `dock-item${active ? ' active' : ''}`;
+        btn.style.height = `${rowH}px`;
+        btn.style.paddingLeft = paddingLeft;
+        btn.style.fontSize = fontSize;
+        btn.style.fontWeight = fontWeight;
+        if (color && !active) btn.style.color = color;
+        if (item.title) btn.title = item.title;
+        btn.addEventListener('mousedown', (e) => { if (e && e.preventDefault) e.preventDefault(); });
+        btn.addEventListener('click', (e) => {
+          if (e && e.stopPropagation) e.stopPropagation();
+          try { window.dispatchEvent(new CustomEvent('agy-sidebar-plugin-activated', { detail: { id: item.id } })); } catch (_) {}
+          if (typeof item.onClick === 'function') item.onClick();
+          scheduleSync();
+        });
+        const left = document.createElement('span');
+        left.className = 'dock-left';
+        left.style.gap = `${iconGap}px`;
+        left.appendChild(makeIconSvg(item.icon, iconSize));
+        const lbl = document.createElement('span');
+        lbl.className = 'dock-lbl';
+        lbl.textContent = isZh ? item.label : (item.labelEn || item.label);
+        left.appendChild(lbl);
+        btn.appendChild(left);
+        if (typeof item.getDotClass === 'function') {
+          const dotCls = item.getDotClass();
+          if (dotCls) {
+            const dot = document.createElement('span');
+            dot.className = `dock-dot ${dotCls}`.trim();
+            btn.appendChild(dot);
+          }
+        }
+        listEl.appendChild(btn);
+      }
+      containerEl.appendChild(listEl);
+    }
+    function scheduleSync() {
+      if (syncTimer) return;
+      syncTimer = setTimeout(syncNow, 40);
+    }
+    if (typeof MutationObserver === 'function' && document.body) {
+      const obs = new MutationObserver((mutations) => {
+        for (let i = 0; i < mutations.length; i++) {
+          if (!isInsideAnyHost(mutations[i].target)) { scheduleSync(); break; }
+        }
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+    }
+    if (typeof window.addEventListener === 'function') window.addEventListener('resize', scheduleSync, true);
+    if (typeof document.addEventListener === 'function') document.addEventListener('scroll', scheduleSync, true);
+    const api = {
+      version: DOCK_VERSION,
+      _items: items,
+      register(item) { if (!item || !item.id) return; items.set(item.id, item); syncNow(); },
+      unregister(id) { items.delete(id); scheduleSync(); },
+      refresh() { syncNow(); },
+      getGeometry() { return lastGeo; },
+    };
+    window.__AGY_SIDEBAR_DOCK__ = api;
+    setTimeout(syncNow, 250);
+    setTimeout(syncNow, 1200);
+    return api;
   }
 
-  // 节流观察 DOM 审批按钮 & 左侧栏「插件」区块间距归一化
+  // 节流观察 DOM 审批按钮
   let domScanTimer = null;
   if (typeof MutationObserver === 'function') {
     const obs = new MutationObserver(() => {
@@ -2395,13 +2637,30 @@
       domScanTimer = setTimeout(() => {
         domScanTimer = null;
         scanDomForApproval();
-        normalizeLeftSidebarPluginsGap();
       }, 450);
     });
     obs.observe(document.body, { childList: true, subtree: true });
   }
 
+  const sidebarDock = ensureAgySidebarDock();
+  if (sidebarDock) {
+    sidebarDock.register({
+      id: 'antigravity-notifier',
+      label: '远程推送',
+      labelEn: 'Remote Push',
+      order: 20,
+      icon: 'bell',
+      title: '远程推送与任务通知设置 (Alt+N)',
+      isActive: () => Boolean(state.modalOpen),
+      getDotClass: () =>
+        state.prefs.dnd ? 'dnd' : state.awaitingApproval ? 'waiting' : state.anyRunning ? 'running' : 'idle',
+      onClick: () => {
+        state.modalOpen = !state.modalOpen;
+        render();
+      },
+    });
+  }
+
   render();
-  setTimeout(normalizeLeftSidebarPluginsGap, 300);
   pollTimer = setTimeout(pollTrajectoriesLoop, 1500);
 })();

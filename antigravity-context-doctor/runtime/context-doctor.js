@@ -1968,7 +1968,7 @@
 
   function isOutsidePluginHosts(el) {
     if (!el || !el.closest) return true;
-    return !el.closest(`#${HOST_ID}, #agy-usage-dashboard-host, #agy-snippets-host, #agy-notifier-host, #agy-kb-host`);
+    return !el.closest(`#${HOST_ID}, #agy-sidebar-plugins-dock, #agy-usage-dashboard-host, #agy-snippets-host, #agy-notifier-host, #agy-kb-host`);
   }
 
   function hasLeftSidebarAnchor(container) {
@@ -2444,6 +2444,7 @@
         state.tabOpen = true;
         state.prefs.open = true;
         state.allowFloatingFallback = false;
+        window.__AGY_ACTIVE_AUX_PLUGIN__ = 'antigravity-context-doctor';
         try {
           window.dispatchEvent(new CustomEvent('agy-aux-plugin-activated', { detail: { id: 'antigravity-context-doctor' } }));
         } catch (_) {}
@@ -2464,6 +2465,7 @@
     state.tabOpen = true;
     state.prefs.open = true;
     state.allowFloatingFallback = !auxNow.found;
+    window.__AGY_ACTIVE_AUX_PLUGIN__ = 'antigravity-context-doctor';
     try {
       window.dispatchEvent(new CustomEvent('agy-aux-plugin-activated', { detail: { id: 'antigravity-context-doctor' } }));
     } catch (_) {}
@@ -2477,6 +2479,9 @@
     if (!state.prefs.open) return;
     state.prefs.open = false;
     state.allowFloatingFallback = false;
+    if (window.__AGY_ACTIVE_AUX_PLUGIN__ === 'antigravity-context-doctor') {
+      window.__AGY_ACTIVE_AUX_PLUGIN__ = '';
+    }
     savePrefs(state.prefs);
     renderAll();
   }
@@ -2486,6 +2491,9 @@
     state.prefs.open = false;
     state.openedInNativePane = false;
     state.allowFloatingFallback = false;
+    if (window.__AGY_ACTIVE_AUX_PLUGIN__ === 'antigravity-context-doctor') {
+      window.__AGY_ACTIVE_AUX_PLUGIN__ = '';
+    }
     savePrefs(state.prefs);
     renderAll();
   }
@@ -5349,7 +5357,10 @@
       syncHostThemeToRoot(aux.bgColor || '');
 
       // 若右侧栏处于无原生标签条的启动页状态，自动在原生顶栏空白区呈现标签页（与原生标签样式一致）
-      const useVirtualTab = Boolean(state.tabOpen && !mounted);
+      const activeOtherAux = Boolean(
+        window.__AGY_ACTIVE_AUX_PLUGIN__ && window.__AGY_ACTIVE_AUX_PLUGIN__ !== 'antigravity-context-doctor'
+      );
+      const useVirtualTab = Boolean(state.tabOpen && !mounted && (showPanel || !activeOtherAux));
       if (refs.vTabBar) {
         if (useVirtualTab) {
           const isZh = state.isZh;

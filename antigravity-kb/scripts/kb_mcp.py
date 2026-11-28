@@ -135,6 +135,10 @@ def resolve_vaults(vault_arg=None, allow_ad_hoc=True):
         if vpath and os.path.normcase(os.path.realpath(os.path.expanduser(vpath))) == os.path.normcase(expanded):
             return [v]
 
+    default_expanded = os.path.realpath(os.path.expanduser(DEFAULT_VAULT_PATH))
+    if os.path.normcase(default_expanded) == os.path.normcase(expanded):
+        return [{"id": "personal", "label": "个人知识库", "path": default_expanded, "kind": "personal"}]
+
     if allow_ad_hoc and os.path.isdir(expanded):
         return [{"id": "custom", "label": os.path.basename(expanded) or expanded, "path": expanded, "kind": "custom"}]
 
@@ -769,12 +773,6 @@ TOOLS = [
         },
         "_meta": {
             "ui": {"resourceUri": KB_APP_URI},
-            "com.google.antigravity/ui": {
-                "entrypoints": [
-                    {"type": "aux_pane", "title": "知识库"},
-                    {"type": "global", "title": "知识库"},
-                ]
-            },
         },
     },
     {

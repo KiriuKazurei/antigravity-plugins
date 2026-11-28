@@ -182,11 +182,6 @@ TOOLS = [
         "inputSchema": {"type": "object", "properties": {}},
         "_meta": {
             "ui": {"resourceUri": NOTIFIER_APP_URI},
-            "com.google.antigravity/ui": {
-                "entrypoints": [
-                    {"type": "global", "title": "远程推送"},
-                ]
-            },
         },
     },
     {

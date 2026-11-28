@@ -8,16 +8,13 @@
   "plugins": [
     {
       "dir": "antigravity-kb",
-      "kind": "mcp-app",
-      "needsHostLoader": false,
+      "kind": "hybrid",
+      "needsHostLoader": true,
       "mcp": {
         "serverKey": "kb",
         "script": "scripts/kb_mcp.py",
         "resourceUri": "ui://kb/app.html",
-        "entrypoints": [
-          { "tool": "kb_open_panel", "type": "aux_pane", "title": "知识库" },
-          { "tool": "kb_open_panel", "type": "global", "title": "知识库" }
-        ]
+        "entrypoints": []
       }
     },
     {
@@ -39,9 +36,7 @@
         "serverKey": "snippets",
         "script": "scripts/snippets_mcp.py",
         "resourceUri": "ui://snippets/app.html",
-        "entrypoints": [
-          { "tool": "open_panel", "type": "global", "title": "模板库" }
-        ]
+        "entrypoints": []
       }
     },
     {
@@ -52,9 +47,7 @@
         "serverKey": "notifier",
         "script": "scripts/notifier_mcp.py",
         "resourceUri": "ui://notifier/app.html",
-        "entrypoints": [
-          { "tool": "open_panel", "type": "global", "title": "远程推送" }
-        ]
+        "entrypoints": []
       }
     },
     {

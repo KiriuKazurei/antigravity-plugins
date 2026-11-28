@@ -382,9 +382,14 @@ domCtx.__AGY_ON_RPC_DATA__('GetAllCascadeTrajectories', {
 assert.strictEqual(fakeNotifications.length, 1, 'Must fire desktop notification on completion');
 assert(fakeNotifications[0].title.includes('任务已完成'));
 
-// 4. 左侧栏「远程推送」入口已迁移至原生 MCP App，不再向左侧栏 DOM 注入按钮
+// 4. 左侧栏「远程推送」入口应通过统一插件基座 (#agy-sidebar-plugins-dock) 注册，而非旧版孤立按钮
 const hostEl = fakeDoc.getElementById('agy-notifier-host');
 const sidebarBtn = hostEl.shadowRoot.getElementById('agy-notifier-sidebar-btn');
-assert.strictEqual(sidebarBtn, null, 'Legacy injected sidebar button must not render (migrated to native MCP App)');
+assert.strictEqual(sidebarBtn, null, 'Legacy injected sidebar button must not render');
+assert(domCtx.__AGY_SIDEBAR_DOCK__, 'Unified sidebar dock must be initialized');
+const dockHost = fakeDoc.getElementById('agy-sidebar-plugins-dock');
+assert(dockHost && dockHost.shadowRoot, 'Unified sidebar dock host must be mounted');
+const dockRoot = dockHost.shadowRoot.getElementById('agy-dock-root');
+assert(dockRoot && dockRoot.className.includes('dock') && !dockRoot.className.includes('hidden'), 'Unified sidebar dock must be visible below Customizations');
 
 console.log('All antigravity-notifier tests passed!');

@@ -36,8 +36,6 @@ class TestKbMcpApp(unittest.TestCase):
         self.assertIn("kb_open_panel", tools)
         meta = tools["kb_open_panel"]["_meta"]
         self.assertEqual(meta["ui"]["resourceUri"], "ui://kb/app.html")
-        ep_types = [e["type"] for e in meta["com.google.antigravity/ui"]["entrypoints"]]
-        self.assertIn("aux_pane", ep_types)
         self.assertEqual(tools["kb_app_save_note"]["_meta"]["ui"]["visibility"], ["app"])
 
     def test_resources_list_and_read(self):

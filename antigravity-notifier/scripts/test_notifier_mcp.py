@@ -23,8 +23,7 @@ class TestNotifierMcpApp(unittest.TestCase):
     def test_entrypoint_is_global_only_and_html_reads(self):
         tlist = notifier_mcp.handle_rpc_request({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
         tools = {t["name"]: t for t in tlist["result"]["tools"]}
-        eps = [e["type"] for e in tools["open_panel"]["_meta"]["com.google.antigravity/ui"]["entrypoints"]]
-        self.assertEqual(eps, ["global"])
+        self.assertEqual(tools["open_panel"]["_meta"]["ui"]["resourceUri"], "ui://notifier/app.html")
 
         rread = notifier_mcp.handle_rpc_request(
             {"jsonrpc": "2.0", "id": 2, "method": "resources/read", "params": {"uri": "ui://notifier/app.html"}}
