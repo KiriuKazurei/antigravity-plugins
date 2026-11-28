@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "context-doctor": {
+      "command": "python",
+      "args": [
+        "${PLUGIN_ROOT}/scripts/context_doctor_mcp.py"
+      ]
+    }
+  }
+}

@@ -1166,6 +1166,7 @@
     handoffDirty: false,
     tabOpen: false,
     openedInNativePane: false,
+    allowFloatingFallback: false,
     lastAuxRect: null,
     toastMsg: '',
     toastTimer: null,
@@ -2007,16 +2008,30 @@
     return false;
   }
 
+  const AUX_TAB_CONTROLS = 'button, [role="tab"], [role="button"], [draggable="true"]';
+
+  function isExcludedTabControl(el) {
+    if (!el) return true;
+    if (el.tagName === 'A') return true;
+    if (el.getAttribute && (el.getAttribute('data-agy-cd-tab') === '1' || el.getAttribute('data-agy-kb-tab') === '1')) {
+      return true;
+    }
+    if (el.closest?.('[data-agy-cd-tab="1"], [data-agy-kb-tab="1"], [role="menu"], [role="dialog"], article, p, pre, code, .prose, .markdown')) {
+      return true;
+    }
+    return false;
+  }
+
   function locateNativeAuxTabStrip(paneEl) {
     if (typeof document === 'undefined' || !document.querySelectorAll) {
       return { found: false };
     }
     if (!paneEl) return locateNativeAuxPane().strip || { found: false };
     const paneRect = paneEl.getBoundingClientRect();
-    const minLeft = paneRect.left - 2;
-    const maxRight = paneRect.right + 2;
-    const minTop = paneRect.top - 2;
-    const maxTop = paneRect.top + 52;
+    const minLeft = paneRect.left - 4;
+    const maxRight = paneRect.right + 4;
+    const minTop = paneRect.top - 4;
+    const maxTop = paneRect.top + 56;
 
     const btns = paneEl.querySelectorAll(AUX_TAB_CONTROLS);
     let plusBtn = null;
@@ -2026,7 +2041,7 @@
     for (let i = 0; i < btns.length; i++) {
       const b = btns[i];
       if (!isOutsidePluginHosts(b) || typeof b.getBoundingClientRect !== 'function') continue;
-      if (b.closest?.('[data-agy-cd-tab="1"], [data-agy-kb-tab="1"], [role="menu"], [role="dialog"]') || b.getAttribute('data-agy-cd-tab') === '1') continue;
+      if (isExcludedTabControl(b)) continue;
       const r = b.getBoundingClientRect();
       if (
         r.top < minTop ||
@@ -2053,7 +2068,7 @@
         )
       ) {
         if (!tabAnchor) tabAnchor = b;
-      } else if (txt && r.width >= 28) {
+      } else if (txt && txt.length <= 80 && r.width >= 28 && r.width <= 360) {
         dynamicCandidates.push({ el: b, rect: r });
       }
     }
@@ -2071,25 +2086,26 @@
       if (
         searchRoot.parentElement &&
         searchRoot.parentElement !== document.body &&
+        searchRoot.parentElement !== paneEl &&
         typeof searchRoot.parentElement.getBoundingClientRect === 'function' &&
-        searchRoot.parentElement.getBoundingClientRect().height <= 64
+        searchRoot.parentElement.getBoundingClientRect().height <= 68
       ) {
         searchRoot = searchRoot.parentElement;
       }
       const pBtns = searchRoot.querySelectorAll('button, [role="button"]');
       for (let i = 0; i < pBtns.length; i++) {
         const pb = pBtns[i];
-        if (pb === tabAnchor || (pb.getAttribute && (pb.getAttribute('data-agy-cd-tab') === '1' || pb.getAttribute('data-agy-kb-tab') === '1'))) continue;
+        if (pb === tabAnchor || isExcludedTabControl(pb)) continue;
         const pr = pb.getBoundingClientRect();
         const ptxt = (pb.textContent || '').trim();
         if (
-          pr.left >= tr.right - 2 &&
+          pr.left >= tr.right - 4 &&
           pr.right <= maxRight &&
           pr.width >= 16 &&
-          pr.width <= 40 &&
+          pr.width <= 44 &&
           pr.height >= 16 &&
-          pr.height <= 40 &&
-          Math.abs(pr.top - tr.top) <= 12 &&
+          pr.height <= 44 &&
+          Math.abs(pr.top - tr.top) <= 14 &&
           (!ptxt || ptxt === '+')
         ) {
           plusBtn = pb;
@@ -2102,9 +2118,10 @@
       const plusRect = plusBtn.getBoundingClientRect();
       for (let row = plusBtn.parentElement; row && row !== paneEl && row.getBoundingClientRect().height <= 68; row = row.parentElement) {
         tabAnchor = Array.from(row.children).find(peer => {
+          if (isExcludedTabControl(peer)) return false;
           const rect = peer.getBoundingClientRect();
-          return !peer.contains(plusBtn) && !peer.getAttribute('data-agy-cd-tab') && peer.textContent.trim() &&
-            rect.width >= 28 && rect.right <= plusRect.left + 2 && Math.abs(rect.top - plusRect.top) <= 12;
+          return !peer.contains(plusBtn) && peer.textContent.trim() &&
+            rect.width >= 28 && rect.right <= plusRect.left + 4 && Math.abs(rect.top - plusRect.top) <= 14;
         });
         if (tabAnchor) break;
       }
@@ -2114,8 +2131,12 @@
       return { found: false };
     }
     let stripEl = refEl.parentElement;
+    // 若 refEl 被单个 tooltip/tab wrapper 包了一层，或需要包含同行的 plusBtn，则向上找行容器（高度 <= 68）
     while (stripEl !== paneEl) {
+      const needsClimbForSingleChild = stripEl.children && stripEl.children.length === 1;
+      const needsClimbForPlus = Boolean(plusBtn && stripEl.contains && !stripEl.contains(plusBtn));
       if (
+        (needsClimbForSingleChild || needsClimbForPlus) &&
         stripEl.parentElement &&
         stripEl.parentElement !== document.body &&
         stripEl.parentElement !== paneEl
@@ -2131,13 +2152,30 @@
       }
       break;
     }
-    const rect = stripEl.getBoundingClientRect();
-    if (stripEl === paneEl || rect.height <= 0 || rect.height > 68 || (plusBtn && !stripEl.contains(plusBtn))) {
+    let headerEl = stripEl;
+    while (
+      headerEl.parentElement &&
+      headerEl.parentElement !== document.body &&
+      headerEl.parentElement !== paneEl
+    ) {
+      const pr =
+        typeof headerEl.parentElement.getBoundingClientRect === 'function'
+          ? headerEl.parentElement.getBoundingClientRect()
+          : null;
+      if (pr && pr.height > 0 && pr.height <= 68) {
+        headerEl = headerEl.parentElement;
+        continue;
+      }
+      break;
+    }
+    const rect = headerEl.getBoundingClientRect();
+    if (stripEl === paneEl || rect.height <= 0 || rect.height > 68) {
       return { found: false };
     }
     return {
       found: true,
       stripEl,
+      headerEl,
       plusBtn,
       tabAnchor,
       rect: {
@@ -2151,11 +2189,22 @@
     };
   }
 
-  const AUX_TAB_CONTROLS = 'button, a, [role="tab"], [role="button"], [tabindex], [draggable="true"], [data-state], .cursor-pointer';
-
-  function isRightPaneRect(rect, innerW, innerH) {
-    return rect.width >= 180 && rect.height >= innerH * 0.45 && rect.top >= -2 &&
-      rect.top <= innerH * 0.25 && rect.right >= innerW - 64 && rect.left >= 0 && rect.left < innerW - 100;
+  function isRightPaneRect(rect, innerW, innerH, compRect) {
+    if (
+      rect.width < 180 ||
+      rect.height < innerH * 0.45 ||
+      rect.top < -2 ||
+      rect.top > innerH * 0.25 ||
+      rect.right < innerW - 64 ||
+      rect.left < 1 ||
+      rect.left >= innerW - 100
+    ) {
+      return false;
+    }
+    if (compRect && compRect.width > 0) {
+      return rect.left >= compRect.right - 24;
+    }
+    return rect.left >= Math.min(220, innerW * 0.2) && rect.width <= innerW * 0.82;
   }
 
   function findAuxPaneByComposerSplit(composer, innerW, innerH) {
@@ -2171,10 +2220,7 @@
           if (sib.contains && sib.contains(composer)) continue;
           if (typeof sib.getBoundingClientRect !== 'function') continue;
           const r = sib.getBoundingClientRect();
-          if (
-            r.left >= compRect.right - 24 &&
-            isRightPaneRect(r, innerW, innerH) && !hasLeftSidebarAnchor(sib)
-          ) {
+          if (isRightPaneRect(r, innerW, innerH, compRect) && !hasLeftSidebarAnchor(sib)) {
             return sib;
           }
         }
@@ -2190,12 +2236,13 @@
     const innerW = window.innerWidth || 1280;
     const innerH = window.innerHeight || 800;
     const composer = findChatComposer();
+    const compRect = composer && typeof composer.getBoundingClientRect === 'function' ? composer.getBoundingClientRect() : null;
     let best = findAuxPaneByComposerSplit(composer, innerW, innerH);
-    let strip = best && locateNativeAuxTabStrip(best);
+    let strip = best ? locateNativeAuxTabStrip(best) : { found: false };
 
-    // 1. 寻找右侧边栏内部特征元素（地址栏、浏览器导航栏、启动器、xterm、iframe、Diff/Code 编辑器、顶部标签栏）
+    // 1. 寻找右侧边栏内部特征元素（地址栏、浏览器导航栏、启动器、xterm、iframe、Diff/Code 编辑器）
     let anchor = null;
-    const inputs = strip?.found ? [] : document.querySelectorAll('input');
+    const inputs = best ? [] : document.querySelectorAll('input');
     for (let i = 0; i < inputs.length; i++) {
       const inp = inputs[i];
       if (!isOutsidePluginHosts(inp) || typeof inp.getBoundingClientRect !== 'function') continue;
@@ -2214,7 +2261,7 @@
       }
     }
 
-    if (!strip?.found && !anchor) {
+    if (!best && !anchor) {
       const navBtns = document.querySelectorAll('button, [role="button"]');
       for (let i = 0; i < navBtns.length; i++) {
         const b = navBtns[i];
@@ -2230,7 +2277,7 @@
       }
     }
 
-    if (!strip?.found && !anchor) {
+    if (!best && !anchor) {
       const candidates = document.querySelectorAll('button, [role="button"], [role="menuitem"]');
       for (let i = 0; i < candidates.length; i++) {
         const el = candidates[i];
@@ -2246,7 +2293,7 @@
       }
     }
 
-    if (!strip?.found && !anchor) {
+    if (!best && !anchor) {
       const frames = document.querySelectorAll('iframe, webview, .xterm, .monaco-diff-editor, .monaco-editor');
       for (let i = 0; i < frames.length; i++) {
         const f = frames[i];
@@ -2260,7 +2307,7 @@
       }
     }
 
-    if (!strip?.found && anchor) {
+    if (!best && anchor) {
       let cur = anchor.parentElement || anchor;
       for (let depth = 0; cur && cur !== document.body && cur !== document.documentElement && depth < 14; depth++) {
         if (typeof cur.getBoundingClientRect === 'function') {
@@ -2270,25 +2317,30 @@
           if (containsComposer || containsLeftSettings) {
             break;
           }
-          if (isRightPaneRect(r, innerW, innerH)) {
+          if (isRightPaneRect(r, innerW, innerH, compRect)) {
+            best = cur;
             const scoped = locateNativeAuxTabStrip(cur);
-            if (scoped.found) { best = cur; strip = scoped; break; }
+            if (scoped.found) {
+              strip = scoped;
+              break;
+            }
           }
         }
         cur = cur.parentElement;
       }
     }
 
-    if (!strip?.found) {
+    if (!best) {
       const seen = new Set();
       for (const control of document.querySelectorAll(AUX_TAB_CONTROLS)) {
-        if (!isOutsidePluginHosts(control)) continue;
+        if (!isOutsidePluginHosts(control) || isExcludedTabControl(control)) continue;
         const cr = control.getBoundingClientRect();
         if (!cr.width || !cr.height || cr.top < 0 || cr.top > innerH * 0.25) continue;
+        if (compRect && compRect.width > 0 && cr.left < compRect.right - 24) continue;
         for (let pane = control.parentElement; pane && pane !== document.body && !seen.has(pane); pane = pane.parentElement) {
           seen.add(pane);
           const pr = pane.getBoundingClientRect();
-          if (pr.left < 1 || !isRightPaneRect(pr, innerW, innerH) || cr.top > pr.top + 52 ||
+          if (!isRightPaneRect(pr, innerW, innerH, compRect) || cr.top > pr.top + 56 ||
               (composer && pane.contains(composer)) || hasLeftSidebarAnchor(pane)) continue;
           const scoped = locateNativeAuxTabStrip(pane);
           if (!scoped.found) continue;
@@ -2301,13 +2353,23 @@
             best = pane; strip = scoped; break;
           }
         }
-        if (strip?.found) break;
+        if (best) break;
       }
     }
 
-    if (best && strip?.found) {
+    if (best) {
+      if (!strip || !strip.found) {
+        strip = locateNativeAuxTabStrip(best);
+      }
       const r = best.getBoundingClientRect();
-      const contentTop = Math.max(Math.ceil(r.top), strip.rect.bottom + 2);
+      let radius = 10;
+      try {
+        const br = parseFloat(window.getComputedStyle(best).borderRadius);
+        if (Number.isFinite(br) && br >= 0 && br <= 20) radius = br;
+      } catch (_) {}
+      const contentTop = strip.found
+        ? Math.max(Math.round(r.top), Math.round(strip.rect.bottom + 2))
+        : Math.round(r.top) + 44;
       return {
         found: true,
         paneEl: best,
@@ -2316,7 +2378,8 @@
         left: Math.round(r.left),
         top: contentTop,
         width: Math.round(r.width),
-        height: Math.max(0, Math.floor(r.bottom - contentTop)),
+        height: Math.max(180, Math.round(r.bottom - contentTop)),
+        radius,
         bgColor: (() => {
           try {
             const bg = window.getComputedStyle(best).backgroundColor;
@@ -2335,19 +2398,29 @@
     if (typeof document === 'undefined' || !document.querySelectorAll) return null;
     const innerW = window.innerWidth || 1280;
     const btns = document.querySelectorAll('button, [role="button"]');
+    let fallbackRightmost = null;
+    let bestRight = -1;
     for (let i = 0; i < btns.length; i++) {
       const b = btns[i];
       if (!isOutsidePluginHosts(b) || typeof b.getBoundingClientRect !== 'function') continue;
       const r = b.getBoundingClientRect();
-      if (r.top >= 0 && r.top <= 80 && r.right > innerW / 2 && r.width > 0 && r.height > 0) {
+      if (r.top >= 0 && r.top <= 80 && r.right >= innerW - 90 && r.width >= 16 && r.width <= 48 && r.height >= 16 && r.height <= 48) {
         const lbl = (b.getAttribute('aria-label') || b.getAttribute('title') || '').trim();
+        if (/minimi|maximi|restore|close|最小化|最大化|还原|关闭/i.test(lbl)) continue;
         const iconClass = b.querySelector?.('svg')?.getAttribute('class') || '';
-        if (!/maximi|最大化|还原/i.test(lbl) && (/side panel|right (?:side\s?bar|pane|panel)|aux(?:iliary)? pane|辅助侧栏|右侧[边栏面板]|侧边面板/i.test(lbl) || /panel-right(?:-open)?\b/.test(iconClass))) {
+        if (
+          /side\s*(?:bar|pane|panel)|right\s*(?:side\s?bar|pane|panel)|aux(?:iliary)?\s*pane|secondary\s*side|辅助侧栏|右侧[边栏面板]|侧边[栏面板]/i.test(lbl) ||
+          /panel-right(?:-open)?\b/i.test(iconClass)
+        ) {
           return b;
+        }
+        if (r.top >= 22 && r.right >= innerW - 60 && r.right > bestRight) {
+          bestRight = r.right;
+          fallbackRightmost = b;
         }
       }
     }
-    return null;
+    return fallbackRightmost;
   }
 
   function dismissOpenMenus() {
@@ -2360,12 +2433,36 @@
   }
 
   function openContextDoctorInPane(tryOpenNativePane) {
-    if (tryOpenNativePane && !locateNativeAuxPane().found) {
+    const auxNow = locateNativeAuxPane();
+    if (!auxNow.found && tryOpenNativePane) {
       const toggle = findRightPaneToggleButton();
-      if (toggle && toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+      if (toggle && toggle.getAttribute('aria-expanded') !== 'true') {
+        try {
+          toggle.click();
+        } catch (_) {}
+        state.tabOpen = true;
+        state.prefs.open = true;
+        state.allowFloatingFallback = false;
+        try {
+          window.dispatchEvent(new CustomEvent('agy-aux-plugin-activated', { detail: { id: 'antigravity-context-doctor' } }));
+        } catch (_) {}
+        savePrefs(state.prefs);
+        renderAll();
+        setTimeout(() => {
+          if (!state.prefs.open) return;
+          if (!locateNativeAuxPane().found) {
+            state.allowFloatingFallback = true;
+          }
+          renderAll();
+          refreshTargetSession(true);
+          refreshGlobalInsights();
+        }, 160);
+        return;
+      }
     }
     state.tabOpen = true;
     state.prefs.open = true;
+    state.allowFloatingFallback = !auxNow.found;
     try {
       window.dispatchEvent(new CustomEvent('agy-aux-plugin-activated', { detail: { id: 'antigravity-context-doctor' } }));
     } catch (_) {}
@@ -2378,6 +2475,7 @@
   function switchAwayFromContextDoctor() {
     if (!state.prefs.open) return;
     state.prefs.open = false;
+    state.allowFloatingFallback = false;
     savePrefs(state.prefs);
     renderAll();
   }
@@ -2386,6 +2484,7 @@
     state.tabOpen = false;
     state.prefs.open = false;
     state.openedInNativePane = false;
+    state.allowFloatingFallback = false;
     savePrefs(state.prefs);
     renderAll();
   }
@@ -3032,6 +3131,8 @@
     /* 停靠在原生右侧边栏内的主面板（遵循 Antigravity Aux Pane 标准结构） */
     .sidebar {
       container: doctor-pane / inline-size;
+      position: fixed;
+      z-index: 2147483630;
       background: var(--bg);
       color: var(--fg);
       display: flex;
@@ -3039,11 +3140,14 @@
       overflow: hidden;
     }
     .sidebar.docked-aux {
-      position: absolute;
-      z-index: 1;
       border: 0;
       border-radius: 0;
       box-shadow: none;
+    }
+    .sidebar.floating-fallback {
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
     }
     .sidebar.closed {
       display: none;
@@ -3298,27 +3402,35 @@
     .overview-breakdown { min-width:0; font-variant-numeric:tabular-nums; }
     .overview-breakdown button { font:inherit; color:inherit; cursor:pointer; }
     .overview-breakdown button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
-    .treemap-canvas { position:relative; width:100%; height:196px; border-radius:var(--r-lg); }
-    .sidebar.wide .treemap-canvas { height:220px; }
-    .tile-slot { position:absolute; padding:2px; overflow:hidden; }
-    .treemap-tile { display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; width:100%; height:100%; overflow:hidden; padding:0; text-align:left; border-radius:var(--r-md); border:1px solid color-mix(in srgb,var(--tile-color) 36%,var(--border)); background:color-mix(in srgb,var(--tile-color) 15%,var(--bg-elev)); }
+    .treemap-canvas { position:relative; width:100%; height:216px; border-radius:var(--r-lg); overflow:hidden; }
+    .sidebar.wide .treemap-canvas { height:240px; }
+    .tile-slot { position:absolute; padding:2px; box-sizing:border-box; }
+    .treemap-tile { display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; width:100%; height:100%; overflow:hidden; padding:0; text-align:left; border-radius:var(--r-md); border:1px solid color-mix(in srgb,var(--tile-color) 36%,var(--border)); background:color-mix(in srgb,var(--tile-color) 15%,var(--bg-elev)); transition:background 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease, transform 0.12s ease; }
     .treemap-tile > * { flex:none; margin-inline:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .treemap-tile > :first-child { margin-top:4px; }
     .treemap-tile strong { color:color-mix(in srgb,var(--tile-color) 52%,var(--fg)); font-size:12px; }
     .treemap-tile span { font-size:11px; color:var(--fg-muted); }
-    button.treemap-tile:hover { transform:translateY(-1px); border-color:var(--tile-color); }
-    .treemap-tile[aria-pressed=true] { box-shadow:0 0 0 1.5px var(--tile-color); }
-    .treemap-tile.muted { opacity:0.55; }
+    .treemap-tile.compact { flex-direction:row; align-items:center; justify-content:space-between; gap:4px; padding:0 6px; }
+    .treemap-tile.compact > * { margin-inline:0; margin-top:0; }
+    .treemap-tile.compact strong { flex:1; min-width:0; font-size:11px; }
+    .treemap-tile.compact span { font-size:10px; flex-shrink:0; }
+    .treemap-tile.narrow > * { margin-inline:4px; }
+    .treemap-tile.narrow strong { font-size:10.5px; }
+    .treemap-tile.narrow span { font-size:10px; }
+    button.treemap-tile:hover { transform:translateY(-1px); border-color:var(--tile-color); background:color-mix(in srgb,var(--tile-color) 24%,var(--bg-elev)); }
+    .treemap-tile[aria-pressed="true"], .treemap-tile.selected { border-color:var(--tile-color); background:color-mix(in srgb,var(--tile-color) 34%,var(--bg-elev)); box-shadow:inset 0 0 0 1.5px var(--tile-color), 0 0 0 1px color-mix(in srgb,var(--tile-color) 65%,transparent); }
+    .treemap-tile[aria-pressed="true"] strong, .treemap-tile.selected strong { color:var(--fg); }
+    .treemap-tile.muted { opacity:0.36; filter:saturate(0.65); }
     .treemap-tile.remaining { border:1px solid var(--border); background:repeating-linear-gradient(-45deg,transparent,transparent 5px,color-mix(in srgb,var(--fg) 4.5%,transparent) 5px,color-mix(in srgb,var(--fg) 4.5%,transparent) 10px); }
     .remaining strong { color:var(--fg-muted); font-weight:500; }
     .overview-toolbar, .breakdown-heading, .overview-legend { display:flex; align-items:center; gap:6px 10px; flex-wrap:wrap; }
     .overview-toolbar { justify-content:space-between; padding:8px 0 12px; }
     .overview-legend { flex:1 1 160px; gap:3px 8px; }
     .overview-legend-item, .overview-segments button, .overview-more { border:0; background:transparent; border-radius:var(--r-sm); }
-    .overview-legend-item { display:inline-flex; align-items:center; gap:4px; padding:2px; white-space:nowrap; }
+    .overview-legend-item { display:inline-flex; align-items:center; gap:4px; padding:2px 5px; white-space:nowrap; }
     .overview-toolbar, .breakdown-heading { font-size:11px; color:var(--fg-muted); }
     .overview-legend-item:hover, .overview-more:hover, .detail-row:hover { background:var(--bg-hover); }
-    .overview-legend-item[aria-pressed=true] { color:var(--fg); background:var(--bg-card); }
+    .overview-legend-item[aria-pressed="true"] { color:var(--fg); background:color-mix(in srgb,var(--tile-color) 22%,var(--bg-card)); box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--tile-color) 55%,var(--border)); }
     .overview-swatch { display:inline-block; width:8px; height:8px; flex:none; border-radius:2px; background:var(--tile-color); }
     .overview-segments { display:inline-flex; flex-wrap:wrap; gap:1px; padding:2px; background:var(--bg-card); border:1px solid var(--border); border-radius:var(--r-md); }
     .overview-segments button { min-height:22px; padding:2px 6px; }
@@ -3689,6 +3801,62 @@
       detailItems: buildOverviewDetails(stepStats.steps || [], categories, usedTokens, isZh) };
   }
 
+  function computeVisualTreemapTiles(model, windowMode, canvasW, canvasH, isZh) {
+    const W = Math.max(220, Number(canvasW) || 440);
+    const H = Math.max(180, Number(canvasH) || 216);
+    const cats = (model.categories || []).filter(c => c.tokens > 0);
+    const freeTile = windowMode && model.remainingTokens > 0
+      ? (model.windowTiles || []).find(t => t.key === 'remaining') || {
+        key: 'remaining', id: 'remaining', label: isZh ? '剩余空间' : 'Free Space',
+        tokens: model.remainingTokens, shareOfWindow: model.windowLimit ? model.remainingTokens / model.windowLimit * 100 : 0,
+        color: 'var(--border-strong)',
+      }
+      : null;
+
+    if (!cats.length && !freeTile) return [];
+    if (!cats.length && freeTile) {
+      return [{ ...freeTile, x: 0, y: 0, w: 100, h: 100, pxW: W, pxH: H }];
+    }
+
+    // 幂次压缩 + 保底面积：让大/中/小块在宽和高两个维度上都自然拉开层次，同时避免极小块被压成不可见细条
+    const powVals = cats.map(c => Math.pow(Math.max(1, c.tokens), 0.62));
+    const powSum = powVals.reduce((s, v) => s + v, 0) || 1;
+    const minShare = cats.length > 1 ? Math.min(0.075, 0.34 / cats.length) : 1;
+    const weightedCats = cats.map((c, idx) => ({
+      ...c,
+      value: Math.max(powSum * minShare, powVals[idx]),
+    }));
+
+    const toPctTiles = (pxTiles) => pxTiles.map(t => ({
+      ...t,
+      pxW: t.w,
+      pxH: t.h,
+      x: Math.max(0, Math.min(100, (t.x / W) * 100)),
+      y: Math.max(0, Math.min(100, (t.y / H) * 100)),
+      w: Math.max(0, Math.min(100, (t.w / W) * 100)),
+      h: Math.max(0, Math.min(100, (t.h / H) * 100)),
+    }));
+
+    if (!freeTile) {
+      return toPctTiles(computeSquarifiedTreemap(weightedCats, 0, 0, W, H));
+    }
+
+    // 窗口模式：在真实像素坐标系下给已用区域分配充足的 2D 宽高空间，使多分类同时按宽度和高度有机排布
+    const occRatio = Math.max(0, Math.min(1, (model.occupancyPct || 0) / 100));
+    const minUsedShare = cats.length >= 5 ? 0.58 : cats.length >= 3 ? 0.52 : cats.length === 2 ? 0.44 : 0.32;
+    const usedShare = Math.min(0.88, Math.max(occRatio, minUsedShare));
+    const usedPxW = W * usedShare;
+    const usedPxTiles = computeSquarifiedTreemap(weightedCats, 0, 0, usedPxW, H);
+    const freePxTile = {
+      ...freeTile,
+      x: usedPxW,
+      y: 0,
+      w: Math.max(0, W - usedPxW),
+      h: H,
+    };
+    return toPctTiles([...usedPxTiles, freePxTile]);
+  }
+
   function ensureShadowDom() {
     if (shadowRootRef) {
       return shadowRootRef;
@@ -3780,9 +3948,18 @@
         renderSettingsPopover();
       },
     });
+    const closeBtn = h('button', {
+      className: 'icon-btn',
+      textContent: '✕',
+      title: '关闭',
+      style: 'display:none',
+      onClick: () => {
+        closeContextDoctor();
+      },
+    });
     const header = h('div', { className: 'hdr' }, [
       h('div', { className: 'hdr-left' }, [pinBtn]),
-      h('div', { className: 'hdr-actions' }, [refreshBtn, settingsBtn]),
+      h('div', { className: 'hdr-actions' }, [refreshBtn, settingsBtn, closeBtn]),
     ]);
 
     const gaugeBox = h('div', { className: 'gauge-box' });
@@ -3813,6 +3990,7 @@
       sidebar,
       host,
       pinBtn,
+      closeBtn,
       gaugeBox,
       tabsBar,
       body,
@@ -4179,28 +4357,53 @@
         draw();
       } });
     const swatch = () => h('span', { className: 'overview-swatch', 'aria-hidden': true });
+    let lastCanvasW = 0;
+    let canvasResizeObserver = null;
     function draw() {
+      if (canvasResizeObserver) {
+        canvasResizeObserver.disconnect();
+        canvasResizeObserver = null;
+      }
       panel.textContent = '';
       const filter = state.overviewCategoryFilter;
       const windowMode = state.treemapMode === 'window';
-      const tiles = windowMode ? model.windowTiles : model.usedTiles;
-      const canvas = h('div', { className: 'treemap-canvas' });
+      const canvasW = Math.max(220, panel.clientWidth || lastCanvasW || 440);
+      lastCanvasW = canvasW;
+      const itemCount = model.categories.length + (windowMode && model.remainingTokens > 0 ? 1 : 0);
+      const canvasH = Math.min(256, Math.max(204, 176 + Math.max(0, itemCount - 2) * 12));
+      const tiles = computeVisualTreemapTiles(model, windowMode, canvasW, canvasH, isZh);
+      const canvas = h('div', { className: 'treemap-canvas', style: `height:${canvasH}px` });
       for (const tile of tiles) {
         const free = tile.key === 'remaining';
         const pct = windowMode ? tile.shareOfWindow : tile.shareOfUsed;
         const title = `${tile.label} · ${tile.tokens.toLocaleString()} token · ${formatPct(pct, 2)} ${windowMode ? (isZh ? '占窗口' : 'of window') : (isZh ? '占已用' : 'of used')}`;
-        const fullLabel = tile.w >= 11 && tile.h >= 22;
-        const showValue = fullLabel || (tile.w >= 7 && tile.h >= 12);
+        const pxW = tile.pxW || (tile.w / 100) * canvasW;
+        const pxH = tile.pxH || (tile.h / 100) * canvasH;
+        const isCompact = pxH < 46 && pxH >= 24 && pxW >= 54;
+        const isNarrow = pxW < 84;
+        const fullLabel = (pxW >= 44 && pxH >= 40) || isCompact;
+        const showValue = fullLabel || (pxW >= 32 && pxH >= 20);
+        const isSelected = !free && filter === tile.key;
         const props = free ? { 'data-category': tile.key } : categoryControl(tile.key);
         const face = h(free ? 'div' : 'button', { ...props, title, 'aria-label': title,
-          className: `treemap-tile${free ? ' remaining' : ''}${filter !== 'all' && filter !== tile.key ? ' muted' : ''}` }, [
+          className: `treemap-tile${free ? ' remaining' : ''}${isCompact ? ' compact' : ''}${isNarrow ? ' narrow' : ''}${isSelected ? ' selected' : ''}${filter !== 'all' && filter !== tile.key ? ' muted' : ''}` }, [
           fullLabel && h('strong', {}, tile.label),
           showValue && h('span', {}, `${formatTokens(tile.tokens)}${free ? ` · ${Math.round(pct)}%` : ''}`),
         ]);
-        canvas.appendChild(h('div', { className: 'tile-slot', style: `--tile-color:${tile.color};left:${tile.x}%;top:${tile.y}%;width:${tile.w}%;height:${tile.h}%` }, [face]));
+        canvas.appendChild(h('div', { className: 'tile-slot', style: `--tile-color:${tile.color};left:${tile.x.toFixed(3)}%;top:${tile.y.toFixed(3)}%;width:${tile.w.toFixed(3)}%;height:${tile.h.toFixed(3)}%` }, [face]));
       }
       if (!tiles.length) canvas.appendChild(h('div', { className: 'empty' }, isZh ? '暂无已用上下文' : 'No used context yet'));
       panel.appendChild(canvas);
+      if (typeof ResizeObserver === 'function') {
+        canvasResizeObserver = new ResizeObserver((entries) => {
+          const w = Math.round(entries[0]?.contentRect?.width || 0);
+          if (w >= 220 && Math.abs(w - lastCanvasW) >= 12) {
+            lastCanvasW = w;
+            draw();
+          }
+        });
+        canvasResizeObserver.observe(canvas);
+      }
       const legend = h('div', { className: 'overview-legend' });
       const freeTile = windowMode && tiles.find(tile => tile.key === 'remaining');
       for (const cat of freeTile ? [...model.categories, freeTile] : model.categories) {
@@ -5002,23 +5205,63 @@
   function applySidebarGeometry() {
     if (!refs.sidebar) return;
     const aux = state.tabOpen ? locateNativeAuxPane() : { found: false };
-    const mounted = syncAuxTabInStrip(aux.strip || { found: false });
-    const pane = mounted && state.prefs.open ? aux.paneEl : null;
-    const oldPane = state.lastAuxRect?.paneEl;
-    if (oldPane && oldPane !== pane) oldPane.removeAttribute?.('data-agy-cd-positioned');
-    state.openedInNativePane = !!pane;
-    state.lastAuxRect = pane ? aux : null;
-    const showEdge = !pane && state.prefs.showEdgeTab;
+    const mounted = aux.found ? syncAuxTabInStrip(aux.strip || { found: false }) : (removeAuxTabFromStrip(), false);
+
+    // 始终保持宿主挂载在 document.body，避免侵入 React 管理的 pane DOM
+    if (refs.host && refs.host.parentElement !== document.body && document.body) {
+      document.body.appendChild(refs.host);
+    }
+
+    if (aux.found) {
+      state.openedInNativePane = true;
+      state.allowFloatingFallback = false;
+      state.lastAuxRect = aux;
+      const showPanel = Boolean(state.prefs.open);
+      const showEdge = !showPanel && state.prefs.showEdgeTab;
+      refs.edgeTab.className = `edge-tab ${showEdge ? '' : 'hidden'}`;
+      syncHostThemeToRoot(aux.bgColor || '');
+      if (refs.closeBtn) refs.closeBtn.style.display = mounted ? 'none' : 'inline-flex';
+      if (!showPanel) {
+        refs.sidebar.className = 'sidebar closed';
+        return;
+      }
+      refs.sidebar.style.left = `${aux.left}px`;
+      refs.sidebar.style.top = `${aux.top}px`;
+      refs.sidebar.style.right = 'auto';
+      refs.sidebar.style.bottom = 'auto';
+      refs.sidebar.style.width = `${aux.width}px`;
+      refs.sidebar.style.height = `${aux.height}px`;
+      refs.sidebar.className = `sidebar docked-aux${aux.width >= 560 ? ' wide' : ''}`;
+      return;
+    }
+
+    // 原生右侧边栏未打开或刚被关闭
+    if (state.openedInNativePane) {
+      state.openedInNativePane = false;
+      state.allowFloatingFallback = false;
+    }
+    state.lastAuxRect = null;
+    syncHostThemeToRoot('');
+
+    const showFallback = Boolean(state.prefs.open && state.allowFloatingFallback);
+    const showEdge = !showFallback && state.prefs.showEdgeTab;
     refs.edgeTab.className = `edge-tab ${showEdge ? '' : 'hidden'}`;
-    if (!pane) refs.sidebar.className = 'sidebar closed';
-    const parent = pane || document.body;
-    if (refs.host.parentElement !== parent) parent.appendChild(refs.host);
-    syncHostThemeToRoot(pane ? aux.bgColor : '');
-    if (!pane) return;
-    if (window.getComputedStyle(pane).position === 'static') pane.setAttribute('data-agy-cd-positioned', '');
-    refs.sidebar.style.left = refs.sidebar.style.right = refs.sidebar.style.bottom = '0px';
-    refs.sidebar.style.top = `${aux.top - pane.getBoundingClientRect().top - (pane.clientTop || 0)}px`;
-    refs.sidebar.className = `sidebar docked-aux${aux.width >= 560 ? ' wide' : ''}`;
+    if (refs.closeBtn) refs.closeBtn.style.display = 'inline-flex';
+
+    if (!showFallback) {
+      refs.sidebar.className = 'sidebar closed';
+      return;
+    }
+    const innerW = window.innerWidth || 1280;
+    const innerH = window.innerHeight || 800;
+    const w = clampNumber(state.prefs.sidebarWidth, 320, Math.min(640, innerW - 40), 400);
+    refs.sidebar.style.left = `${Math.max(12, innerW - w - 12)}px`;
+    refs.sidebar.style.top = '52px';
+    refs.sidebar.style.right = 'auto';
+    refs.sidebar.style.bottom = 'auto';
+    refs.sidebar.style.width = `${w}px`;
+    refs.sidebar.style.height = `${Math.max(260, innerH - 64)}px`;
+    refs.sidebar.className = `sidebar floating-fallback${w >= 560 ? ' wide' : ''}`;
   }
 
   function renderAll(opts) {

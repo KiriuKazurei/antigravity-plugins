@@ -951,8 +951,8 @@ siteTab1.tagName = siteTab2.tagName = 'DIV';
 domApi.openContextDoctorInPane(false);
 const taskTab = browserTabStrip.querySelector('[data-agy-cd-tab="1"]');
 assert(taskTab && browserTabStrip.children[2] === taskTab && !leftStrip.contains(taskTab), 'inject before wrapped + in the matching native strip');
-assert.strictEqual(hostEl.parentElement, browserAuxPane, 'active content belongs to the native pane');
-assert(browserAuxPane._rect.top + parseFloat(sidebar.style.top) >= browserTabStrip._rect.bottom && !isClosed(), 'content must not cover the native tab row');
+assert.strictEqual(hostEl.parentElement, fakeBody, 'host must remain on document.body to avoid mutating React pane DOM');
+assert(parseFloat(sidebar.style.left) === 520 && parseFloat(sidebar.style.top) >= browserTabStrip._rect.bottom && !isClosed(), 'content must align to native pane below tab row');
 const clickEvent = target => ({ target, preventDefault() {}, stopPropagation() {} });
 docListeners.click(clickEvent(siteTab1));
 assert(isClosed() && taskTab.getAttribute('aria-selected') === 'false', 'clicking a dynamic tab must release the native content');
@@ -987,6 +987,32 @@ const menuTab = replacedStrip.querySelector('[data-agy-cd-tab="1"]');
 assert(menuTab && !isClosed(), 'delayed menu-open must dock once the native pane exists');
 menuTab.querySelector('.agy-cd-aux-tab-close').listeners.click[0](clickEvent(menuTab));
 assert(isClosed() && !replacedStrip.querySelector('[data-agy-cd-tab="1"]'));
+
+// 回归验证 5：右侧边栏关闭时，聊天消息滚动区及其中带 data-state 的文件链接 <a> 绝对不能被误识别为右侧边栏或注入标签
+splitRoot.removeChild(browserAuxPane);
+chatPane._rect = { left: 220, top: 40, right: 1280, bottom: 800, width: 1060, height: 760 };
+const chatScroll = makeFakeElement('div');
+chatScroll._rect = { left: 220, top: 40, right: 1280, bottom: 680, width: 1060, height: 640 };
+const msgPara = makeFakeElement('p');
+msgPara._rect = { left: 420, top: 52, right: 1080, bottom: 84, width: 660, height: 32 };
+const fileLink = makeFakeElement('a');
+fileLink.setAttribute('data-state', 'closed');
+fileLink.textContent = 'install_context_doctor.py';
+fileLink._rect = { left: 460, top: 54, right: 640, bottom: 80, width: 180, height: 26 };
+msgPara.appendChild(fileLink);
+chatScroll.appendChild(msgPara);
+chatPane.appendChild(chatScroll);
+chatPane.appendChild(composerEl);
+composerEl._rect = { left: 420, top: 700, right: 1080, bottom: 780, width: 660, height: 80 };
+assert.strictEqual(domApi.locateNativeAuxPane().found, false, 'chat scroll container with file links must never be misdetected as right aux pane');
+st.tabOpen = true;
+st.prefs.open = true;
+st.allowFloatingFallback = false;
+domApi.renderAll();
+assert.strictEqual(msgPara.querySelectorAll('[data-agy-cd-tab="1"]').length, 0, 'must never inject tab into chat message paragraph');
+assert(isClosed(), 'auto-restore when right pane is closed must stay hidden');
+domApi.closeContextDoctor();
+
 fakeDoc.body.children = prevChildren;
 
 console.log('All antigravity-context-doctor tests passed!');
