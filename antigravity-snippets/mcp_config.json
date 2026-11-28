@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "snippets": {
+      "command": "python",
+      "args": [
+        "${PLUGIN_ROOT}/scripts/snippets_mcp.py"
+      ]
+    }
+  }
+}

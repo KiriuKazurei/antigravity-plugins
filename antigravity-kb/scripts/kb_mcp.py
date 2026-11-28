@@ -12,10 +12,13 @@ Antigravity 轻量化 Markdown 知识库 MCP Server (stdio JSON-RPC 2.0)
 
 import json
 import os
+import pathlib
 import re
 import sys
 import tempfile
 import time
+
+SUPPORTED_PROTOCOLS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PLUGIN_DIR = os.path.dirname(SCRIPT_DIR)
@@ -25,6 +28,12 @@ FALLBACK_CONFIG_PATH = os.path.join(
 )
 DEFAULT_VAULT_PATH = os.environ.get("AGY_KB_DEFAULT_VAULT") or os.path.join(
     os.path.expanduser("~"), ".gemini", "kb"
+)
+KB_APP_URI = "ui://kb/app.html"
+KB_APP_MIME = "text/html;profile=mcp-app"
+KB_APP_HTML_PATH = os.path.join(PLUGIN_DIR, "app", "dist", "app.html")
+FALLBACK_APP_HTML_PATH = os.path.join(
+    os.path.expanduser("~"), ".gemini", "config", "plugins", "antigravity-kb", "app", "dist", "app.html"
 )
 
 SKIP_DIRS = {
@@ -48,6 +57,9 @@ MD_EXTS = (".md", ".markdown")
 
 
 def get_config_path():
+    plugin_data = os.environ.get("PLUGIN_DATA")
+    if plugin_data:
+        return os.path.join(plugin_data, "kb-config.json")
     if os.path.exists(DEFAULT_CONFIG_PATH):
         return DEFAULT_CONFIG_PATH
     if os.path.exists(FALLBACK_CONFIG_PATH):
@@ -55,17 +67,22 @@ def get_config_path():
     return DEFAULT_CONFIG_PATH
 
 
+def _load_raw_config_file():
+    candidates = [get_config_path(), DEFAULT_CONFIG_PATH, FALLBACK_CONFIG_PATH]
+    for path in candidates:
+        if path and os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        return loaded
+            except Exception:
+                continue
+    return {}
+
+
 def load_kb_config():
-    cfg_path = get_config_path()
-    data = {}
-    try:
-        if os.path.exists(cfg_path):
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-                if isinstance(loaded, dict):
-                    data = loaded
-    except Exception:
-        data = {}
+    data = _load_raw_config_file()
 
     vaults = data.get("vaults")
     if not isinstance(vaults, list) or not vaults:
@@ -93,7 +110,7 @@ def ensure_default_vault():
     return DEFAULT_VAULT_PATH
 
 
-def resolve_vaults(vault_arg=None):
+def resolve_vaults(vault_arg=None, allow_ad_hoc=True):
     cfg = load_kb_config()
     vaults = cfg["vaults"]
     ensure_default_vault()
@@ -112,17 +129,16 @@ def resolve_vaults(vault_arg=None):
         if key == v.get("id") or key == v.get("label") or key == v.get("kind"):
             return [v]
 
-    expanded = os.path.abspath(os.path.expanduser(key))
+    expanded = os.path.realpath(os.path.expanduser(key))
     for v in vaults:
         vpath = v.get("path")
-        if vpath and os.path.abspath(os.path.expanduser(vpath)) == expanded:
+        if vpath and os.path.normcase(os.path.realpath(os.path.expanduser(vpath))) == os.path.normcase(expanded):
             return [v]
 
-    # Allow referencing an existing registered workspace vault or explicit existing directory
-    if os.path.isdir(expanded):
+    if allow_ad_hoc and os.path.isdir(expanded):
         return [{"id": "custom", "label": os.path.basename(expanded) or expanded, "path": expanded, "kind": "custom"}]
 
-    raise ValueError(f"未找到知识库目录: {vault_arg}")
+    raise ValueError(f"未找到已注册的知识库目录: {vault_arg}")
 
 
 def resolve_safe_md_path(root_path, rel_path, allow_missing=True):
@@ -135,16 +151,18 @@ def resolve_safe_md_path(root_path, rel_path, allow_missing=True):
         raise ValueError("路径越界：不允许使用盘符绝对路径")
     if not cleaned.lower().endswith(MD_EXTS):
         cleaned += ".md"
-    base = os.path.abspath(os.path.expanduser(root_path))
-    target = os.path.abspath(os.path.join(base, cleaned))
+    base = os.path.realpath(os.path.expanduser(root_path))
+    joined = os.path.abspath(os.path.join(base, cleaned))
+    # 对已存在文件或父目录执行 realpath 校验，防止符号链接 / Windows junction 越界
+    check_path = os.path.realpath(joined) if os.path.exists(joined) else os.path.join(os.path.realpath(os.path.dirname(joined)), os.path.basename(joined))
     base_nc = os.path.normcase(base)
-    target_nc = os.path.normcase(target)
+    target_nc = os.path.normcase(check_path)
     if target_nc != base_nc and not target_nc.startswith(base_nc + os.sep):
-        raise ValueError("路径越界：不允许访问知识库目录之外的文件")
-    if not allow_missing and not os.path.isfile(target):
+        raise ValueError("路径越界：不允许访问知识库目录之外的文件（含符号链接）")
+    if not allow_missing and not os.path.isfile(check_path):
         raise FileNotFoundError(f"笔记不存在: {cleaned}")
-    rel_norm = os.path.relpath(target, base).replace("\\", "/")
-    return target, rel_norm
+    rel_norm = os.path.relpath(check_path, base).replace("\\", "/")
+    return check_path, rel_norm
 
 
 def parse_markdown_meta(text, rel_path=""):
@@ -505,14 +523,16 @@ def atomic_write_text(target_path, content):
 
 
 def tool_kb_write(args):
-    vaults = resolve_vaults(args.get("vault"))
+    if "content" not in args or not isinstance(args.get("content"), str):
+        raise ValueError("缺少必填字符串参数 content")
+    vaults = resolve_vaults(args.get("vault"), allow_ad_hoc=False)
     vault = vaults[0]
     overwrite = args.get("overwrite", True)
     target, rel_norm = resolve_safe_md_path(vault["path"], args.get("rel_path"), allow_missing=True)
     if not overwrite and os.path.exists(target):
         raise FileExistsError(f"笔记已存在且 overwrite=false: {rel_norm}")
     final_text = format_frontmatter_content(
-        str(args.get("content") or ""),
+        args["content"],
         title=args.get("title"),
         tags=args.get("tags"),
     )
@@ -522,6 +542,7 @@ def tool_kb_write(args):
         "vault": vault.get("id"),
         "rel_path": rel_norm,
         "full_path": target,
+        "file_uri": pathlib.Path(target).as_uri(),
         "bytes": len(final_text.encode("utf-8")),
     }
 
@@ -556,7 +577,206 @@ def tool_kb_append(args):
     }
 
 
+def save_kb_config(cfg):
+    cfg_path = get_config_path()
+    os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+    atomic_write_text(cfg_path, json.dumps(cfg, ensure_ascii=False, indent=2) + "\n")
+
+
+def load_kb_app_html():
+    candidates = [
+        os.environ.get("AGY_KB_APP_HTML") or "",
+        KB_APP_HTML_PATH,
+        FALLBACK_APP_HTML_PATH,
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+    raise FileNotFoundError(f"未找到知识库 MCP App HTML 资源: {KB_APP_HTML_PATH}")
+
+
+def _strip_note_meta(n):
+    return {
+        "rel_path": n.get("rel_path", ""),
+        "title": n.get("title", ""),
+        "tags": n.get("tags", []),
+        "excerpt": (n.get("excerpt") or "")[:160],
+        "mtime": n.get("mtime", 0),
+        "bytes": n.get("bytes", 0),
+    }
+
+
+def _build_vault_state(vault_arg=None, query="", tag=""):
+    cfg = load_kb_config()
+    vaults = resolve_vaults(vault_arg, allow_ad_hoc=False)
+    active = vaults[0]
+    notes = scan_vault_notes(active["path"])
+
+    tag_counts = {}
+    for n in notes:
+        for t in n.get("tags", []):
+            tag_counts[t] = tag_counts.get(t, 0) + 1
+
+    filtered = notes
+    tag_norm = str(tag or "").strip().lstrip("#").lower()
+    if tag_norm:
+        filtered = [n for n in filtered if any(t.lower() == tag_norm for t in n.get("tags", []))]
+    q = str(query or "").strip().lower()
+    if q:
+        terms = [w for w in q.split() if w]
+        matched = []
+        for n in filtered:
+            hay = " ".join([
+                n.get("title", ""),
+                n.get("rel_path", ""),
+                n.get("excerpt", ""),
+                " ".join(n.get("tags", [])),
+            ]).lower()
+            if all(term in hay for term in terms):
+                matched.append(n)
+        filtered = matched
+
+    top_tags = [
+        {"tag": k, "count": v}
+        for k, v in sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))[:40]
+    ]
+    return {
+        "ok": True,
+        "activeVaultId": active.get("id") or cfg.get("activeVaultId") or "personal",
+        "activeVault": active,
+        "vaults": cfg["vaults"],
+        "query": str(query or ""),
+        "activeTag": str(tag or "").strip().lstrip("#"),
+        "totalCount": len(notes),
+        "notes": [_strip_note_meta(n) for n in filtered[:200]],
+        "tags": top_tags,
+    }
+
+
+def tool_kb_open_panel(args):
+    args = args if isinstance(args, dict) else {}
+    state = _build_vault_state(
+        vault_arg=args.get("vault"),
+        query=args.get("query") or "",
+        tag=args.get("tag") or "",
+    )
+    # 入口结果只返回有界元数据与初始笔记引用，正文由前端通过 kb_app_read_note 按需加载，避免突破 1 MiB 轨迹限额
+    note_ref = str(args.get("note") or "").strip()
+    if not note_ref and state["notes"]:
+        note_ref = state["notes"][0]["rel_path"]
+    state["initialNoteRef"] = note_ref
+    return state
+
+
+def tool_kb_app_get_state(args):
+    args = args if isinstance(args, dict) else {}
+    return _build_vault_state(
+        vault_arg=args.get("vault"),
+        query=args.get("query") or "",
+        tag=args.get("tag") or "",
+    )
+
+
+def tool_kb_app_read_note(args):
+    data = tool_kb_read(args if isinstance(args, dict) else {})
+    if isinstance(data, dict) and data.get("full_path"):
+        data["file_uri"] = pathlib.Path(data["full_path"]).as_uri()
+    return data
+
+
+def tool_kb_app_save_note(args):
+    args = args if isinstance(args, dict) else {}
+    res = tool_kb_write(args)
+    note_data = tool_kb_app_read_note({"note": res["rel_path"], "vault": res["vault"]})
+    state = _build_vault_state(vault_arg=res["vault"])
+    return {
+        "ok": True,
+        "saved": res,
+        "note": note_data,
+        "notes": state["notes"],
+        "tags": state["tags"],
+        "totalCount": state["totalCount"],
+    }
+
+
+def tool_kb_app_delete_note(args):
+    args = args if isinstance(args, dict) else {}
+    vault = resolve_vaults(args.get("vault"), allow_ad_hoc=False)[0]
+    target, rel_norm = resolve_safe_md_path(vault["path"], args.get("rel_path"), allow_missing=False)
+    os.remove(target)
+    state = _build_vault_state(vault_arg=vault.get("id"))
+    return {
+        "ok": True,
+        "deleted": rel_norm,
+        "notes": state["notes"],
+        "tags": state["tags"],
+        "totalCount": state["totalCount"],
+    }
+
+
+def tool_kb_app_switch_vault(args):
+    args = args if isinstance(args, dict) else {}
+    vault_id = str(args.get("vault_id") or "").strip()
+    cfg = load_kb_config()
+    found = None
+    for v in cfg["vaults"]:
+        if v.get("id") == vault_id:
+            found = v
+            break
+    if not found:
+        raise ValueError(f"未找到 Vault: {vault_id}")
+    cfg["activeVaultId"] = found["id"]
+    save_kb_config(cfg)
+    return _build_vault_state(vault_arg=found["id"])
+
+
+def tool_kb_app_add_vault(args):
+    args = args if isinstance(args, dict) else {}
+    raw_path = str(args.get("path") or "").strip()
+    if not raw_path:
+        raise ValueError("Vault 路径不能为空")
+    abs_path = os.path.abspath(os.path.expanduser(raw_path))
+    if not os.path.isdir(abs_path):
+        raise ValueError(f"目录不存在: {abs_path}")
+    label = str(args.get("label") or os.path.basename(abs_path) or abs_path).strip()
+    cfg = load_kb_config()
+    for v in cfg["vaults"]:
+        if v.get("path") and os.path.normcase(os.path.abspath(os.path.expanduser(v["path"]))) == os.path.normcase(abs_path):
+            cfg["activeVaultId"] = v["id"]
+            save_kb_config(cfg)
+            return _build_vault_state(vault_arg=v["id"])
+    new_id = f"vault-{int(time.time() * 1000)}"
+    cfg["vaults"].append({"id": new_id, "label": label, "path": abs_path, "kind": "custom"})
+    cfg["activeVaultId"] = new_id
+    save_kb_config(cfg)
+    return _build_vault_state(vault_arg=new_id)
+
+
 TOOLS = [
+    {
+        "name": "kb_open_panel",
+        "title": "知识库",
+        "description": "在 Antigravity 右侧边栏或全局视图中打开轻量化 Markdown 知识库面板。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "vault": {"type": "string", "description": "可选：指定打开的 Vault ID"},
+                "note": {"type": "string", "description": "可选：默认打开的笔记路径或标题"},
+                "query": {"type": "string", "description": "可选：初始搜索关键词"},
+                "tag": {"type": "string", "description": "可选：初始标签过滤"},
+            },
+        },
+        "_meta": {
+            "ui": {"resourceUri": KB_APP_URI},
+            "com.google.antigravity/ui": {
+                "entrypoints": [
+                    {"type": "aux_pane", "title": "知识库"},
+                    {"type": "global", "title": "知识库"},
+                ]
+            },
+        },
+    },
     {
         "name": "kb_list",
         "description": "列出 Antigravity Markdown 知识库中的笔记文件、标签和可用 Vault 目录。",
@@ -629,14 +849,102 @@ TOOLS = [
             "required": ["note", "content"],
         },
     },
+    {
+        "name": "kb_app_get_state",
+        "description": "App-only: 获取当前知识库列表、Vault 与标签统计。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "vault": {"type": "string"},
+                "query": {"type": "string"},
+                "tag": {"type": "string"},
+            },
+        },
+        "_meta": {"ui": {"visibility": ["app"]}},
+    },
+    {
+        "name": "kb_app_read_note",
+        "description": "App-only: 读取笔记详情、反向链接与路径。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "note": {"type": "string"},
+                "vault": {"type": "string"},
+            },
+            "required": ["note"],
+        },
+        "_meta": {"ui": {"visibility": ["app"]}},
+    },
+    {
+        "name": "kb_app_save_note",
+        "description": "App-only: 保存或新建笔记并刷新列表。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "rel_path": {"type": "string"},
+                "content": {"type": "string"},
+                "title": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "vault": {"type": "string"},
+                "overwrite": {"type": "boolean"},
+            },
+            "required": ["rel_path", "content"],
+        },
+        "_meta": {"ui": {"visibility": ["app"]}},
+    },
+    {
+        "name": "kb_app_delete_note",
+        "description": "App-only: 安全删除当前 Vault 内的指定笔记。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "rel_path": {"type": "string"},
+                "vault": {"type": "string"},
+            },
+            "required": ["rel_path"],
+        },
+        "_meta": {"ui": {"visibility": ["app"]}},
+    },
+    {
+        "name": "kb_app_switch_vault",
+        "description": "App-only: 切换当前活跃 Vault。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "vault_id": {"type": "string"},
+            },
+            "required": ["vault_id"],
+        },
+        "_meta": {"ui": {"visibility": ["app"]}},
+    },
+    {
+        "name": "kb_app_add_vault",
+        "description": "App-only: 挂载本地目录作为知识库 Vault。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "label": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+        "_meta": {"ui": {"visibility": ["app"]}},
+    },
 ]
 
 TOOL_HANDLERS = {
+    "kb_open_panel": tool_kb_open_panel,
     "kb_list": tool_kb_list,
     "kb_search": tool_kb_search,
     "kb_read": tool_kb_read,
     "kb_write": tool_kb_write,
     "kb_append": tool_kb_append,
+    "kb_app_get_state": tool_kb_app_get_state,
+    "kb_app_read_note": tool_kb_app_read_note,
+    "kb_app_save_note": tool_kb_app_save_note,
+    "kb_app_delete_note": tool_kb_app_delete_note,
+    "kb_app_switch_vault": tool_kb_app_switch_vault,
+    "kb_app_add_vault": tool_kb_app_add_vault,
 }
 
 
@@ -652,23 +960,83 @@ def handle_rpc_request(msg):
         return None
 
     if method == "initialize":
-        proto = params.get("protocolVersion") or "2024-11-05"
+        req_proto = params.get("protocolVersion")
+        proto = req_proto if req_proto in SUPPORTED_PROTOCOLS else SUPPORTED_PROTOCOLS[0]
         return {
             "jsonrpc": "2.0",
             "id": msg_id,
             "result": {
                 "protocolVersion": proto,
-                "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "antigravity-kb", "version": "1.0.0"},
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                    "resources": {"subscribe": False, "listChanged": False},
+                },
+                "serverInfo": {"name": "antigravity-kb", "version": "2.0.0"},
             },
         }
     if method == "ping":
         return {"jsonrpc": "2.0", "id": msg_id, "result": {}}
+    if method == "resources/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": msg_id,
+            "result": {
+                "resources": [
+                    {
+                        "uri": KB_APP_URI,
+                        "name": "Antigravity 知识库",
+                        "description": "Antigravity 原生右侧边栏轻量化 Markdown 知识库 UI",
+                        "mimeType": KB_APP_MIME,
+                        "_meta": {"ui": {"prefersBorder": False}},
+                    }
+                ]
+            },
+        }
+    if method == "resources/read":
+        uri = params.get("uri")
+        if uri != KB_APP_URI:
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "error": {"code": -32002, "message": f"Resource not found: {uri}"},
+            }
+        try:
+            html = load_kb_app_html()
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "contents": [
+                        {
+                            "uri": KB_APP_URI,
+                            "mimeType": KB_APP_MIME,
+                            "text": html,
+                            "_meta": {"ui": {"prefersBorder": False}},
+                        }
+                    ]
+                },
+            }
+        except Exception as exc:
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "error": {"code": -32603, "message": f"读取知识库 UI 失败: {exc}"},
+            }
     if method == "tools/list":
         return {"jsonrpc": "2.0", "id": msg_id, "result": {"tools": TOOLS}}
     if method == "tools/call":
         name = params.get("name")
-        arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+        raw_args = params.get("arguments")
+        if raw_args is not None and not isinstance(raw_args, dict):
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id,
+                "result": {
+                    "content": [{"type": "text", "text": "参数错误: arguments 必须是 JSON 对象"}],
+                    "isError": True,
+                },
+            }
+        arguments = raw_args if isinstance(raw_args, dict) else {}
         handler = TOOL_HANDLERS.get(name)
         if not handler:
             return {
@@ -681,13 +1049,21 @@ def handle_rpc_request(msg):
             }
         try:
             payload = handler(arguments)
+            if name == "kb_open_panel":
+                summary = f"已打开知识库「{payload.get('activeVault', {}).get('label', '个人知识库')}」，共 {payload.get('totalCount', 0)} 篇笔记。"
+                text_out = summary
+            else:
+                text_out = json.dumps(payload, ensure_ascii=False, indent=2)
+            result_obj = {
+                "content": [{"type": "text", "text": text_out}],
+                "isError": False,
+            }
+            if isinstance(payload, dict):
+                result_obj["structuredContent"] = payload
             return {
                 "jsonrpc": "2.0",
                 "id": msg_id,
-                "result": {
-                    "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False, indent=2)}],
-                    "isError": False,
-                },
+                "result": result_obj,
             }
         except Exception as exc:
             return {

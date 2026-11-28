@@ -3089,25 +3089,7 @@
     root.className = `root ${state.isDark ? 'dark' : 'light'}`;
     root.innerHTML = '';
 
-    if (store.prefs.showFloatingBtn && !state.manager.open) {
-      root.appendChild(
-        el(
-          'button',
-          {
-            className: 'fab',
-            title: '打开 Prompt 模板库 (Alt+P) · 在输入框输入 # 也可直接触发',
-            onMousedown: (e) => e.preventDefault(),
-            onClick: () => openManager(),
-          },
-          [
-            el('span', { className: 'fab-hash', textContent: '#' }),
-            el('span', { textContent: '模板库' }),
-            el('span', { className: 'fab-count', textContent: `${store.snippets.length}` }),
-          ]
-        )
-      );
-    }
-
+    // 模板库主入口已迁移至左侧栏原生 MCP App（「插件 > 模板库」），不再渲染右下角悬浮按钮
     const popup = renderPopup();
     if (popup) {
       root.appendChild(popup);

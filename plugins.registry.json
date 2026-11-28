@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "maxMcpToolNameLength": 64,
+  "coreHostFiles": [
+    "plugin_host.py",
+    "pluginLoader.js"
+  ],
+  "plugins": [
+    {
+      "dir": "antigravity-kb",
+      "kind": "mcp-app",
+      "needsHostLoader": false,
+      "mcp": {
+        "serverKey": "kb",
+        "script": "scripts/kb_mcp.py",
+        "resourceUri": "ui://kb/app.html",
+        "entrypoints": [
+          { "tool": "kb_open_panel", "type": "aux_pane", "title": "知识库" },
+          { "tool": "kb_open_panel", "type": "global", "title": "知识库" }
+        ]
+      }
+    },
+    {
+      "dir": "antigravity-context-doctor",
+      "kind": "hybrid",
+      "needsHostLoader": true,
+      "mcp": {
+        "serverKey": "context-doctor",
+        "script": "scripts/context_doctor_mcp.py",
+        "resourceUri": "ui://context-doctor/app.html",
+        "entrypoints": []
+      }
+    },
+    {
+      "dir": "antigravity-snippets",
+      "kind": "hybrid",
+      "needsHostLoader": true,
+      "mcp": {
+        "serverKey": "snippets",
+        "script": "scripts/snippets_mcp.py",
+        "resourceUri": "ui://snippets/app.html",
+        "entrypoints": [
+          { "tool": "open_panel", "type": "global", "title": "模板库" }
+        ]
+      }
+    },
+    {
+      "dir": "antigravity-notifier",
+      "kind": "hybrid",
+      "needsHostLoader": true,
+      "mcp": {
+        "serverKey": "notifier",
+        "script": "scripts/notifier_mcp.py",
+        "resourceUri": "ui://notifier/app.html",
+        "entrypoints": [
+          { "tool": "open_panel", "type": "global", "title": "远程推送" }
+        ]
+      }
+    },
+    {
+      "dir": "antigravity-usage-dashboard",
+      "kind": "dom-only",
+      "needsHostLoader": true
+    },
+    {
+      "dir": "antigravity-context-menu",
+      "kind": "dom-only",
+      "needsHostLoader": true
+    },
+    {
+      "dir": "antigravity-computer-use",
+      "kind": "native-mcp",
+      "needsHostLoader": false
+    }
+  ]
+}

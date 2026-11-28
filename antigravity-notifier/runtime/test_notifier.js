@@ -382,13 +382,9 @@ domCtx.__AGY_ON_RPC_DATA__('GetAllCascadeTrajectories', {
 assert.strictEqual(fakeNotifications.length, 1, 'Must fire desktop notification on completion');
 assert(fakeNotifications[0].title.includes('任务已完成'));
 
-// 4. 点击侧边栏「远程推送」入口按钮打开独立右侧界面
+// 4. 左侧栏「远程推送」入口已迁移至原生 MCP App，不再向左侧栏 DOM 注入按钮
 const hostEl = fakeDoc.getElementById('agy-notifier-host');
 const sidebarBtn = hostEl.shadowRoot.getElementById('agy-notifier-sidebar-btn');
-assert(sidebarBtn, 'Sidebar entry button must render under Customizations');
-sidebarBtn.dispatchEvent({ type: 'click' });
-const standalonePage = hostEl.shadowRoot.getElementById('agy-notifier-standalone');
-assert(standalonePage, 'Clicking sidebar entry must open standalone interface');
-assert.strictEqual(standalonePage.className, 'standalone-page');
+assert.strictEqual(sidebarBtn, null, 'Legacy injected sidebar button must not render (migrated to native MCP App)');
 
 console.log('All antigravity-notifier tests passed!');

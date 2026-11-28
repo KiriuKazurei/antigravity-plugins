@@ -350,8 +350,8 @@
       }
     }
 
-    let projectsNode = null;
-    let projectsTop = 0;
+    let nextSectionNode = null;
+    let nextSectionTop = Infinity;
     const scope = sidebarEl || d;
     if (scope.querySelectorAll) {
       const nodes = scope.querySelectorAll('div, span, button, h2, h3, p');
@@ -359,15 +359,15 @@
         const n = nodes[i];
         if (!n || typeof n.getBoundingClientRect !== 'function') continue;
         const txt = (n.textContent || '').trim();
-        if (!/^(Projects|项目)$/i.test(txt)) continue;
+        if (!/^(Plugins|插件|Projects|项目)$/i.test(txt)) continue;
         const nr = n.getBoundingClientRect();
-        if (nr.top > anchorRect.bottom && nr.top < anchorRect.bottom + 150 && nr.left < 280) {
-          projectsNode = n;
-          projectsTop = nr.top;
-          break;
+        if (nr.top > anchorRect.bottom - 4 && nr.top < anchorRect.bottom + 180 && nr.left < 280 && nr.top < nextSectionTop) {
+          nextSectionNode = n;
+          nextSectionTop = nr.top;
         }
       }
     }
+    if (!Number.isFinite(nextSectionTop)) nextSectionTop = 0;
 
     const left = Math.round(anchorRect.left);
     const width = Math.round(anchorRect.width);
@@ -378,14 +378,14 @@
         : Math.round(height + 6);
     let top = Math.round(anchorRect.top + stepY);
 
-    // 若「项目」区块紧贴在「远程推送」下方，仅通过外边距为项目标题留出原生呼吸间距，不改动 React DOM 结构
-    if (projectsNode && projectsTop > 0) {
+    // 若「插件」或「项目」区块紧贴在「远程推送」下方，仅通过外边距为首个区块标题留出与原生一致的呼吸间距
+    if (nextSectionNode && nextSectionTop > 0) {
       const btnBottom = top + height;
-      const desiredGap = Math.max(18, Math.round(stepY - height + 12));
-      const curGap = projectsTop - btnBottom;
+      const desiredGap = Math.max(18, Math.round(stepY - height + 14));
+      const curGap = nextSectionTop - btnBottom;
       if (curGap < desiredGap) {
         try {
-          let pBlock = projectsNode;
+          let pBlock = nextSectionNode;
           while (
             pBlock &&
             pBlock.parentElement &&
@@ -395,30 +395,36 @@
           ) {
             pBlock = pBlock.parentElement;
           }
-          if (pBlock && pBlock.style && !pBlock.dataset?.agyNotifierShift) {
+          if (pBlock && pBlock.style) {
             let baseMt = 0;
-            try {
-              baseMt = parseFloat(w.getComputedStyle(pBlock).marginTop) || 0;
-            } catch (_) {}
-            const shift = Math.max(12, Math.min(48, Math.round(desiredGap - curGap)));
-            if (pBlock.dataset) {
-              pBlock.dataset.agyNotifierBaseMt = String(baseMt);
-              pBlock.dataset.agyNotifierShift = String(shift);
-            }
-            pBlock.style.marginTop = `${baseMt + shift}px`;
-            const updatedRect = projectsNode.getBoundingClientRect();
-            if (updatedRect && updatedRect.top) {
-              projectsTop = updatedRect.top;
+            if (pBlock.dataset && pBlock.dataset.agyNotifierBaseMt !== undefined) {
+              baseMt = parseFloat(pBlock.dataset.agyNotifierBaseMt) || 0;
             } else {
-              projectsTop += shift;
+              try {
+                baseMt = parseFloat(w.getComputedStyle(pBlock).marginTop) || 0;
+              } catch (_) {}
+              if (pBlock.dataset) pBlock.dataset.agyNotifierBaseMt = String(baseMt);
+            }
+            const curApplied = pBlock.dataset && pBlock.dataset.agyNotifierShift ? parseFloat(pBlock.dataset.agyNotifierShift) || 0 : 0;
+            const neededDelta = Math.round(desiredGap - curGap);
+            const nextShift = Math.max(12, Math.min(64, curApplied + neededDelta));
+            if (nextShift !== curApplied) {
+              if (pBlock.dataset) pBlock.dataset.agyNotifierShift = String(nextShift);
+              pBlock.style.marginTop = `${baseMt + nextShift}px`;
+              const updatedRect = nextSectionNode.getBoundingClientRect();
+              if (updatedRect && updatedRect.top) {
+                nextSectionTop = updatedRect.top;
+              } else {
+                nextSectionTop += nextShift - curApplied;
+              }
             }
           }
         } catch (_) {}
       }
     }
 
-    if (projectsTop > 0 && top + height > projectsTop - 4) {
-      top = Math.max(Math.round(anchorRect.bottom + 2), Math.round(projectsTop - height - 4));
+    if (nextSectionTop > 0 && top + height > nextSectionTop - 4) {
+      top = Math.max(Math.round(anchorRect.bottom + 2), Math.round(nextSectionTop - height - 4));
     }
 
     let fontSize = '13px';
@@ -2084,15 +2090,14 @@
 
   function render() {
     state.isDark = detectThemeIsDark();
-    state.sidebarGeo = locateSidebarEntryGeometry(document, window);
+    // 「远程推送」入口已迁移至左侧栏原生「插件」分组 (MCP App global entrypoint)，不再向左侧栏注入 DOM 按钮或修改 marginTop
+    state.sidebarGeo = { visible: false };
     const sr = getShadowRoot();
     const root = cardRefs.root;
     if (!sr || !root) return;
 
     root.className = `root ${state.isDark ? 'dark' : 'light'}`;
     root.innerHTML = '';
-
-    renderSidebarEntryOnly(state.sidebarGeo);
 
     if (state.modalOpen) {
       const segBtn = (id, label) =>
@@ -2264,7 +2269,8 @@
     'resize',
     () => {
       if (state.modalOpen) {
-        const nextGeo = locateSidebarEntryGeometry(document, window);
+        // 原生左侧栏入口已由 MCP App 接管，不再轮询或修改左侧栏 DOM 几何
+      const nextGeo = { visible: false };
         state.sidebarGeo = nextGeo;
         renderSidebarEntryOnly(nextGeo);
         const page = shadowRootRef?.getElementById('agy-notifier-standalone');
@@ -2308,7 +2314,80 @@
     true
   );
 
-  // 节流观察 DOM 审批按钮 & 侧边栏入口几何变化
+  function normalizeLeftSidebarPluginsGap() {
+    try {
+      if (typeof document === 'undefined' || !document.querySelectorAll) return;
+      const btns = document.querySelectorAll('button, a, [role="button"]');
+      let custBtn = null;
+      let custRect = null;
+      for (let i = 0; i < btns.length; i++) {
+        const b = btns[i];
+        if (!b || (b.closest && b.closest(`#${HOST_ID}`))) continue;
+        const txt = (b.textContent || '').trim();
+        if (!/^(Customizations|自定义配置|自定义)$/i.test(txt)) continue;
+        const r = b.getBoundingClientRect();
+        if (r.left >= 0 && r.left < 240 && r.top > 30 && r.top < 360 && r.width > 40 && r.height > 16) {
+          custBtn = b;
+          custRect = r;
+          break;
+        }
+      }
+      if (!custBtn || !custRect) return;
+
+      const nodes = document.querySelectorAll('div, span, button, h2, h3, p');
+      let plugNode = null;
+      let plugRect = null;
+      for (let i = 0; i < nodes.length; i++) {
+        const n = nodes[i];
+        if (!n || (n.closest && n.closest(`#${HOST_ID}`))) continue;
+        const txt = (n.textContent || '').trim();
+        if (!/^(Plugins|插件)$/i.test(txt)) continue;
+        const r = n.getBoundingClientRect();
+        if (r.left >= 0 && r.left < 240 && r.top > custRect.bottom && r.top < custRect.bottom + 120 && r.height > 8 && r.height < 40) {
+          plugNode = n;
+          plugRect = r;
+          break;
+        }
+      }
+      if (!plugNode || !plugRect) return;
+
+      let pBlock = plugNode;
+      while (
+        pBlock &&
+        pBlock.parentElement &&
+        pBlock.parentElement !== document.body &&
+        typeof pBlock.parentElement.contains === 'function' &&
+        !pBlock.parentElement.contains(custBtn)
+      ) {
+        pBlock = pBlock.parentElement;
+      }
+      if (!pBlock || !pBlock.style) return;
+
+      const targetGap = 14;
+      const curGap = plugRect.top - custRect.bottom;
+      if (pBlock.dataset && pBlock.dataset.agyGapAdjusted === '1') {
+        if (curGap >= targetGap - 3 && curGap <= targetGap + 5) return;
+      }
+      if (curGap <= targetGap + 4) return;
+
+      let baseMt = 0;
+      if (pBlock.dataset && pBlock.dataset.agyGapBaseMt !== undefined) {
+        baseMt = parseFloat(pBlock.dataset.agyGapBaseMt) || 0;
+      } else {
+        baseMt = parseFloat(window.getComputedStyle(pBlock).marginTop) || 0;
+        if (pBlock.dataset) pBlock.dataset.agyGapBaseMt = String(baseMt);
+      }
+      const curApplied = pBlock.dataset && pBlock.dataset.agyGapDelta ? parseFloat(pBlock.dataset.agyGapDelta) || 0 : 0;
+      const delta = Math.max(0, Math.min(32, Math.round(curApplied + (curGap - targetGap))));
+      if (pBlock.dataset) {
+        pBlock.dataset.agyGapDelta = String(delta);
+        pBlock.dataset.agyGapAdjusted = '1';
+      }
+      pBlock.style.marginTop = `${baseMt - delta}px`;
+    } catch (_) {}
+  }
+
+  // 节流观察 DOM 审批按钮 & 左侧栏「插件」区块间距归一化
   let domScanTimer = null;
   if (typeof MutationObserver === 'function') {
     const obs = new MutationObserver(() => {
@@ -2316,23 +2395,13 @@
       domScanTimer = setTimeout(() => {
         domScanTimer = null;
         scanDomForApproval();
-        const nextGeo = locateSidebarEntryGeometry(document, window);
-        const prev = state.sidebarGeo || {};
-        if (
-          Boolean(nextGeo.visible) !== Boolean(prev.visible) ||
-          nextGeo.top !== prev.top ||
-          nextGeo.left !== prev.left ||
-          nextGeo.width !== prev.width ||
-          nextGeo.sidebarRight !== prev.sidebarRight
-        ) {
-          state.sidebarGeo = nextGeo;
-          renderSidebarEntryOnly(nextGeo);
-        }
+        normalizeLeftSidebarPluginsGap();
       }, 450);
     });
     obs.observe(document.body, { childList: true, subtree: true });
   }
 
   render();
+  setTimeout(normalizeLeftSidebarPluginsGap, 300);
   pollTimer = setTimeout(pollTrajectoriesLoop, 1500);
 })();

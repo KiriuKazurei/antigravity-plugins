@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "notifier": {
+      "command": "python",
+      "args": [
+        "${PLUGIN_ROOT}/scripts/notifier_mcp.py"
+      ]
+    }
+  }
+}

@@ -14,6 +14,9 @@ PLUGIN_NAME = "antigravity-snippets"
 
 
 def sync_snippets_plugin():
+    app_html = os.path.join(PLUGIN_DIR, "app", "dist", "app.html")
+    if not os.path.isfile(app_html):
+        raise FileNotFoundError(f"缺少 MCP App 产物 {app_html}，请先执行 node tools/mcp-app-build/build.mjs")
     dst_dir = os.path.join(PLUGINS_ROOT, PLUGIN_NAME)
     if os.path.abspath(PLUGIN_DIR) == os.path.abspath(dst_dir):
         return dst_dir

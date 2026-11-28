@@ -1,0 +1,11 @@
+{
+  "name": "agy-mcp-app-build",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

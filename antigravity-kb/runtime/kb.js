@@ -897,17 +897,31 @@
     return false;
   }
 
+  const AUX_TAB_CONTROLS = 'button, [role="tab"], [role="button"], [draggable="true"]';
+
+  function isExcludedTabControl(el) {
+    if (!el) return true;
+    if (el.tagName === 'A') return true;
+    if (el.getAttribute && (el.getAttribute('data-agy-kb-tab') === '1' || el.getAttribute('data-agy-cd-tab') === '1')) {
+      return true;
+    }
+    if (el.closest?.('[data-agy-kb-tab="1"], [data-agy-cd-tab="1"], [role="menu"], [role="dialog"], article, p, pre, code, .prose, .markdown')) {
+      return true;
+    }
+    return false;
+  }
+
   function locateNativeAuxTabStrip(paneEl) {
     if (!document.querySelectorAll) return { found: false };
-    const innerW = window.innerWidth || 1280;
-    const scope = paneEl && paneEl.querySelectorAll ? paneEl : document;
-    const paneRect = paneEl && typeof paneEl.getBoundingClientRect === 'function' ? paneEl.getBoundingClientRect() : null;
-    const minLeft = paneRect ? Math.max(0, paneRect.left - 4) : 28;
-    const maxRight = paneRect ? paneRect.right + 4 : innerW - 12;
-    const minTop = paneRect ? Math.max(0, paneRect.top - 4) : 0;
-    const maxTop = paneRect ? paneRect.top + 52 : 52;
+    if (!paneEl) return locateNativeAuxPane().strip || { found: false };
+    const paneRect = typeof paneEl.getBoundingClientRect === 'function' ? paneEl.getBoundingClientRect() : null;
+    if (!paneRect) return { found: false };
+    const minLeft = paneRect.left - 4;
+    const maxRight = paneRect.right + 4;
+    const minTop = paneRect.top - 4;
+    const maxTop = paneRect.top + 56;
 
-    const btns = scope.querySelectorAll('button, [role="tab"], [role="button"], [data-state]');
+    const btns = paneEl.querySelectorAll(AUX_TAB_CONTROLS);
     let plusBtn = null;
     let tabAnchor = null;
     const dynamicCandidates = [];
@@ -915,15 +929,13 @@
     for (let i = 0; i < btns.length; i++) {
       const b = btns[i];
       if (!isOutsidePluginHosts(b) || typeof b.getBoundingClientRect !== 'function') continue;
-      if (b.getAttribute && (b.getAttribute('data-agy-kb-tab') === '1' || b.getAttribute('data-agy-cd-tab') === '1')) {
-        continue;
-      }
+      if (isExcludedTabControl(b)) continue;
       const r = b.getBoundingClientRect();
       if (
         r.top < minTop ||
         r.top > maxTop ||
-        r.height < 16 ||
-        r.height > 44 ||
+        r.height < 12 ||
+        r.height > 56 ||
         r.left < minLeft ||
         r.right > maxRight ||
         r.width <= 0
@@ -942,13 +954,13 @@
         /^(审查确认|Review Changes?|Open File|终端|Terminal|浏览器|Browser|Swarm|Side Question|New Tab|新建标签页)$/i.test(txt)
       ) {
         if (!tabAnchor) tabAnchor = b;
-      } else if (paneRect && txt.length >= 2 && txt.length <= 80 && r.width >= 48 && r.width <= 320) {
+      } else if (txt && txt.length <= 80 && r.width >= 28 && r.width <= 360) {
         dynamicCandidates.push({ el: b, rect: r });
       }
     }
 
     if (!tabAnchor && dynamicCandidates.length > 0) {
-      dynamicCandidates.sort((a, b) => a.rect.left - b.rect.left);
+      dynamicCandidates.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
       tabAnchor = dynamicCandidates[0].el;
     }
 
@@ -958,27 +970,26 @@
       if (
         searchRoot.parentElement &&
         searchRoot.parentElement !== document.body &&
+        searchRoot.parentElement !== paneEl &&
         typeof searchRoot.parentElement.getBoundingClientRect === 'function' &&
-        searchRoot.parentElement.getBoundingClientRect().height <= 64
+        searchRoot.parentElement.getBoundingClientRect().height <= 68
       ) {
         searchRoot = searchRoot.parentElement;
       }
       const pBtns = searchRoot.querySelectorAll('button, [role="button"]');
       for (let i = 0; i < pBtns.length; i++) {
         const pb = pBtns[i];
-        if (pb === tabAnchor || (pb.getAttribute && (pb.getAttribute('data-agy-kb-tab') === '1' || pb.getAttribute('data-agy-cd-tab') === '1'))) {
-          continue;
-        }
+        if (pb === tabAnchor || isExcludedTabControl(pb)) continue;
         const pr = pb.getBoundingClientRect();
         const ptxt = (pb.textContent || '').trim();
         if (
-          pr.left >= tr.right - 2 &&
+          pr.left >= tr.right - 4 &&
           pr.right <= maxRight &&
           pr.width >= 16 &&
-          pr.width <= 40 &&
+          pr.width <= 44 &&
           pr.height >= 16 &&
-          pr.height <= 40 &&
-          Math.abs(pr.top - tr.top) <= 12 &&
+          pr.height <= 44 &&
+          Math.abs(pr.top - tr.top) <= 14 &&
           (!ptxt || ptxt === '+')
         ) {
           plusBtn = pb;
@@ -987,13 +998,32 @@
       }
     }
 
-    const refEl = plusBtn || tabAnchor;
+    if (!tabAnchor && plusBtn) {
+      const plusRect = plusBtn.getBoundingClientRect();
+      for (let row = plusBtn.parentElement; row && row !== paneEl && row.getBoundingClientRect().height <= 68; row = row.parentElement) {
+        tabAnchor = Array.from(row.children).find((peer) => {
+          if (isExcludedTabControl(peer)) return false;
+          const rect = peer.getBoundingClientRect();
+          return (
+            !peer.contains(plusBtn) &&
+            peer.textContent.trim() &&
+            rect.width >= 28 &&
+            rect.right <= plusRect.left + 4 &&
+            Math.abs(rect.top - plusRect.top) <= 14
+          );
+        });
+        if (tabAnchor) break;
+      }
+    }
+
+    const refEl = tabAnchor || plusBtn;
     if (!refEl || !refEl.parentElement) return { found: false };
     let stripEl = refEl.parentElement;
-    for (let up = 0; up < 2; up++) {
+    while (stripEl !== paneEl) {
+      const needsClimbForSingleChild = stripEl.children && stripEl.children.length === 1;
+      const needsClimbForPlus = Boolean(plusBtn && stripEl.contains && !stripEl.contains(plusBtn));
       if (
-        stripEl.children &&
-        stripEl.children.length === 1 &&
+        (needsClimbForSingleChild || needsClimbForPlus) &&
         stripEl.parentElement &&
         stripEl.parentElement !== document.body &&
         stripEl.parentElement !== paneEl
@@ -1002,18 +1032,35 @@
           typeof stripEl.parentElement.getBoundingClientRect === 'function'
             ? stripEl.parentElement.getBoundingClientRect()
             : null;
-        if (!pr || pr.height <= 64) {
+        if (pr && pr.height > 0 && pr.height <= 68) {
           stripEl = stripEl.parentElement;
           continue;
         }
       }
       break;
     }
-    const rect = stripEl.getBoundingClientRect();
-    if (rect.height > 68) return { found: false };
+    let headerEl = stripEl;
+    while (
+      headerEl.parentElement &&
+      headerEl.parentElement !== document.body &&
+      headerEl.parentElement !== paneEl
+    ) {
+      const pr =
+        typeof headerEl.parentElement.getBoundingClientRect === 'function'
+          ? headerEl.parentElement.getBoundingClientRect()
+          : null;
+      if (pr && pr.height > 0 && pr.height <= 68) {
+        headerEl = headerEl.parentElement;
+        continue;
+      }
+      break;
+    }
+    const rect = headerEl.getBoundingClientRect();
+    if (stripEl === paneEl || rect.height <= 0 || rect.height > 68) return { found: false };
     return {
       found: true,
       stripEl,
+      headerEl,
       plusBtn,
       tabAnchor,
       rect: {
@@ -1027,11 +1074,29 @@
     };
   }
 
+  function isRightPaneRect(rect, innerW, innerH, compRect) {
+    if (
+      rect.width < 180 ||
+      rect.height < innerH * 0.45 ||
+      rect.top < -2 ||
+      rect.top > innerH * 0.25 ||
+      rect.right < innerW - 64 ||
+      rect.left < 1 ||
+      rect.left >= innerW - 100
+    ) {
+      return false;
+    }
+    if (compRect && compRect.width > 0) {
+      return rect.left >= compRect.right - 24;
+    }
+    return rect.left >= Math.min(220, innerW * 0.2) && rect.width <= innerW * 0.82;
+  }
+
   function findAuxPaneByComposerSplit(composer, innerW, innerH) {
     if (!composer || typeof composer.getBoundingClientRect !== 'function') return null;
     const compRect = composer.getBoundingClientRect();
     let cur = composer.parentElement;
-    for (let depth = 0; cur && cur !== document.body && cur !== document.documentElement && depth < 12; depth++) {
+    for (let depth = 0; cur && cur !== document.body && cur !== document.documentElement && depth < 14; depth++) {
       const children = cur.children || [];
       if (children.length >= 2) {
         for (let i = 0; i < children.length; i++) {
@@ -1041,14 +1106,7 @@
           if (hasLeftSidebarAnchor(sib)) continue;
           if (typeof sib.getBoundingClientRect !== 'function') continue;
           const r = sib.getBoundingClientRect();
-          if (
-            r.left >= compRect.right - 24 &&
-            r.width >= 240 &&
-            r.height >= innerH * 0.55 &&
-            r.top >= 0 &&
-            r.top <= 100 &&
-            r.right >= innerW - 36
-          ) {
+          if (isRightPaneRect(r, innerW, innerH, compRect)) {
             return sib;
           }
         }
@@ -1088,10 +1146,12 @@
     const innerW = window.innerWidth || 1280;
     const innerH = window.innerHeight || 800;
     const composer = findChatComposer();
-    let strip = locateNativeAuxTabStrip();
+    const compRect = composer && typeof composer.getBoundingClientRect === 'function' ? composer.getBoundingClientRect() : null;
+    let best = findAuxPaneByComposerSplit(composer, innerW, innerH);
+    let strip = best ? locateNativeAuxTabStrip(best) : { found: false };
 
     let anchor = null;
-    const inputs = document.querySelectorAll('input');
+    const inputs = best ? [] : document.querySelectorAll('input');
     for (let i = 0; i < inputs.length; i++) {
       const inp = inputs[i];
       if (!isOutsidePluginHosts(inp) || typeof inp.getBoundingClientRect !== 'function') continue;
@@ -1110,7 +1170,7 @@
       }
     }
 
-    if (!anchor) {
+    if (!best && !anchor) {
       const navBtns = document.querySelectorAll('button, [role="button"]');
       for (let i = 0; i < navBtns.length; i++) {
         const b = navBtns[i];
@@ -1126,7 +1186,7 @@
       }
     }
 
-    if (!anchor) {
+    if (!best && !anchor) {
       const candidates = document.querySelectorAll('button, [role="button"], [role="menuitem"]');
       for (let i = 0; i < candidates.length; i++) {
         const el = candidates[i];
@@ -1142,7 +1202,7 @@
       }
     }
 
-    if (!anchor) {
+    if (!best && !anchor) {
       const frames = document.querySelectorAll('iframe, webview, .xterm, .monaco-diff-editor, .monaco-editor');
       for (let i = 0; i < frames.length; i++) {
         const f = frames[i];
@@ -1156,9 +1216,7 @@
       }
     }
 
-    if (!anchor && strip.found) anchor = strip.stripEl;
-    let best = null;
-    if (anchor) {
+    if (!best && anchor) {
       let cur = anchor.parentElement || anchor;
       for (let depth = 0; cur && cur !== document.body && cur !== document.documentElement && depth < 14; depth++) {
         if (typeof cur.getBoundingClientRect === 'function') {
@@ -1166,24 +1224,48 @@
           const containsComposer = composer && cur.contains && cur.contains(composer);
           const containsLeftSettings = hasLeftSidebarAnchor(cur);
           if (containsComposer || containsLeftSettings) break;
-          if (
-            r.width >= 240 &&
-            r.height >= innerH * 0.55 &&
-            r.top >= 0 &&
-            r.top <= 100 &&
-            r.right >= innerW - 36
-          ) {
+          if (isRightPaneRect(r, innerW, innerH, compRect)) {
             best = cur;
+            const scoped = locateNativeAuxTabStrip(cur);
+            if (scoped.found) {
+              strip = scoped;
+              break;
+            }
           }
         }
         cur = cur.parentElement;
       }
     }
-    if (!best && composer) {
-      best = findAuxPaneByComposerSplit(composer, innerW, innerH);
+
+    if (!best) {
+      const seen = new Set();
+      for (const control of document.querySelectorAll(AUX_TAB_CONTROLS)) {
+        if (!isOutsidePluginHosts(control) || isExcludedTabControl(control)) continue;
+        const cr = control.getBoundingClientRect();
+        if (!cr.width || !cr.height || cr.top < 0 || cr.top > innerH * 0.25) continue;
+        if (compRect && compRect.width > 0 && cr.left < compRect.right - 24) continue;
+        for (let pane = control.parentElement; pane && pane !== document.body && !seen.has(pane); pane = pane.parentElement) {
+          seen.add(pane);
+          const pr = pane.getBoundingClientRect();
+          if (!isRightPaneRect(pr, innerW, innerH, compRect) || cr.top > pr.top + 56 ||
+              (composer && pane.contains(composer)) || hasLeftSidebarAnchor(pane)) continue;
+          const scoped = locateNativeAuxTabStrip(pane);
+          if (!scoped.found) continue;
+          const semanticTab = scoped.tabAnchor?.getAttribute('role') === 'tab' || scoped.stripEl.getAttribute('role') === 'tablist';
+          const tabWithPlus = scoped.tabAnchor && scoped.plusBtn;
+          const newTabAction = scoped.plusBtn && /new\s*tab|add\s*tab|新建标签|添加标签/i.test(
+            scoped.plusBtn.getAttribute('aria-label') || scoped.plusBtn.getAttribute('title') || ''
+          );
+          if (semanticTab || tabWithPlus || newTabAction) {
+            best = pane; strip = scoped; break;
+          }
+        }
+        if (best) break;
+      }
     }
+
     if (best) {
-      if (!strip.found) {
+      if (!strip || !strip.found) {
         strip = locateNativeAuxTabStrip(best);
       }
       const r = best.getBoundingClientRect();
@@ -1192,8 +1274,9 @@
         const br = parseFloat(window.getComputedStyle(best).borderRadius);
         if (Number.isFinite(br) && br >= 0 && br <= 20) radius = br;
       } catch (_) {}
-      const stripBottom = strip.found ? strip.rect.bottom : 0;
-      const contentTop = strip.found ? Math.max(Math.round(r.top), Math.round(stripBottom + 2)) : Math.max(Math.round(r.top), 38);
+      const contentTop = strip.found
+        ? Math.max(Math.round(r.top), Math.round(strip.rect.bottom + 2))
+        : Math.round(r.top) + 44;
       let bgColor = '';
       try {
         const bg = window.getComputedStyle(best).backgroundColor;
@@ -1202,11 +1285,12 @@
       return {
         found: true,
         paneEl: best,
+        strip,
         hasNativeTabStrip: strip.found,
         left: Math.round(r.left),
         top: contentTop,
         width: Math.round(r.width),
-        height: Math.max(200, Math.round(r.bottom - contentTop)),
+        height: Math.max(180, Math.round(r.bottom - contentTop)),
         radius,
         bgColor,
       };
@@ -1217,18 +1301,29 @@
   function findRightPaneToggleButton() {
     const innerW = window.innerWidth || 1280;
     const btns = document.querySelectorAll('button, [role="button"]');
+    let fallbackRightmost = null;
+    let bestRight = -1;
     for (let i = 0; i < btns.length; i++) {
       const b = btns[i];
       if (!isOutsidePluginHosts(b) || typeof b.getBoundingClientRect !== 'function') continue;
       const r = b.getBoundingClientRect();
-      if (r.top >= 0 && r.top <= 42 && r.right >= innerW - 70 && r.width >= 18 && r.width <= 44 && r.height <= 40) {
+      if (r.top >= 0 && r.top <= 80 && r.right >= innerW - 90 && r.width >= 16 && r.width <= 48 && r.height >= 16 && r.height <= 48) {
         const lbl = (b.getAttribute('aria-label') || b.getAttribute('title') || '').trim();
-        if (/side|pane|panel|aux|侧边|面板|right/i.test(lbl)) {
+        if (/minimi|maximi|restore|close|最小化|最大化|还原|关闭/i.test(lbl)) continue;
+        const iconClass = b.querySelector?.('svg')?.getAttribute('class') || '';
+        if (
+          /side\s*(?:bar|pane|panel)|right\s*(?:side\s?bar|pane|panel)|aux(?:iliary)?\s*pane|secondary\s*side|辅助侧栏|右侧[边栏面板]|侧边[栏面板]/i.test(lbl) ||
+          /panel-right(?:-open)?\b/i.test(iconClass)
+        ) {
           return b;
+        }
+        if (r.top >= 22 && r.right >= innerW - 60 && r.right > bestRight) {
+          bestRight = r.right;
+          fallbackRightmost = b;
         }
       }
     }
-    return null;
+    return fallbackRightmost;
   }
 
   function dismissOpenMenus() {
@@ -1482,7 +1577,7 @@
           e.preventDefault();
           e.stopPropagation();
           dismissOpenMenus();
-          openKbInPane(false);
+          openKbInPane(true);
         });
         if (swarmBtn && swarmBtn.nextSibling) targetParent.insertBefore(btn, swarmBtn.nextSibling);
         else targetParent.appendChild(btn);
@@ -1496,20 +1591,20 @@
     });
   }
 
-  function syncAuxTabInStrip() {
+  function syncAuxTabInStrip(strip) {
     if (!state.tabOpen) {
       removeAuxTabFromStrip();
-      return;
+      return false;
     }
     ensureMenuInjectStyles();
-    let strip = locateNativeAuxTabStrip();
-    if (!strip.found) {
+    if (!strip || !strip.found) {
       const aux = locateNativeAuxPane();
-      if (aux.found && aux.paneEl) {
-        strip = locateNativeAuxTabStrip(aux.paneEl);
-      }
+      strip = aux.found ? aux.strip : { found: false };
     }
-    if (!strip.found || !strip.stripEl) return;
+    if (!strip || !strip.found || !strip.stripEl) {
+      removeAuxTabFromStrip();
+      return false;
+    }
 
     const isZh = getActiveLangZh();
     let tabEl = strip.stripEl.querySelector('[data-agy-kb-tab="1"]');
@@ -1547,7 +1642,8 @@
         e.stopPropagation();
         openKbInPane(false);
       });
-      const insertRef = strip.plusBtn && strip.plusBtn.parentElement === strip.stripEl ? strip.plusBtn : null;
+      let insertRef = strip.plusBtn;
+      while (insertRef && insertRef.parentElement !== strip.stripEl) insertRef = insertRef.parentElement;
       if (insertRef) strip.stripEl.insertBefore(tabEl, insertRef);
       else strip.stripEl.appendChild(tabEl);
     }
@@ -1559,6 +1655,7 @@
     if (lblNode) lblNode.textContent = isZh ? '知识库' : 'Wiki KB';
     const cntNode = tabEl.querySelector('.agy-kb-aux-tab-count');
     if (cntNode) cntNode.textContent = state.notes.length > 0 ? String(state.notes.length) : '';
+    return true;
   }
 
   let auxSyncScheduled = false;
@@ -1568,17 +1665,17 @@
     if (state.config.prefs?.open && !state.tabOpen) {
       state.tabOpen = true;
     }
-    if (state.tabOpen) syncAuxTabInStrip();
+    const aux = state.tabOpen ? locateNativeAuxPane() : { found: false };
+    if (state.tabOpen) {
+      syncAuxTabInStrip(aux.found ? aux.strip : { found: false });
+    }
     if (state.config.prefs?.open) {
-      const aux = locateNativeAuxPane();
       if (state.openedInNativePane && !aux.found) {
         switchAwayFromKb();
         return;
       }
       if (aux.found) {
-        const wasFloating = !state.openedInNativePane;
         state.openedInNativePane = true;
-        if (wasFloating && state.tabOpen) syncAuxTabInStrip();
         state.lastAuxRect = aux;
         applyDrawerGeometry();
       }
@@ -3489,9 +3586,9 @@
         if (!isOutsidePluginHosts(t)) return;
         if (t.closest && t.closest('[data-agy-kb-tab="1"], [data-agy-kb-menu-item="1"]')) return;
 
-        const strip = locateNativeAuxTabStrip();
-        if (strip.found && strip.stripEl && strip.stripEl.contains(t)) {
-          const stripBtn = t.closest('button, [role="tab"], [role="button"], a');
+        const strip = state.lastAuxRect?.strip || locateNativeAuxPane().strip;
+        if (strip && strip.found && strip.stripEl && strip.stripEl.contains(t)) {
+          const stripBtn = t.closest('button, [role="tab"], [role="button"]');
           if (stripBtn && strip.stripEl.contains(stripBtn)) {
             switchAwayFromKb();
           }

@@ -1,10 +1,9 @@
 {
   "mcpServers": {
-    "antigravity-kb": {
+    "kb": {
       "command": "python",
       "args": [
-        "-c",
-        "import os, runpy; root = os.environ.get('PLUGIN_ROOT') or ('.' if os.path.exists('scripts/kb_mcp.py') else os.path.join(os.path.expanduser('~'), '.gemini', 'config', 'plugins', 'antigravity-kb')); runpy.run_path(os.path.join(root, 'scripts', 'kb_mcp.py'), run_name='__main__')"
+        "${PLUGIN_ROOT}/scripts/kb_mcp.py"
       ]
     }
   }

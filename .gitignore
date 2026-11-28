@@ -6,6 +6,14 @@ __pycache__/
 Thumbs.db
 build/
 dist/
+!antigravity-kb/app/dist/
+!antigravity-kb/app/dist/app.html
+!antigravity-context-doctor/app/dist/
+!antigravity-context-doctor/app/dist/app.html
+!antigravity-snippets/app/dist/
+!antigravity-snippets/app/dist/app.html
+!antigravity-notifier/app/dist/
+!antigravity-notifier/app/dist/app.html
 runtime/*.log
 runtime/heal_state.json
 runtime/usage-history.json
@@ -19,3 +27,4 @@ runtime/notify.log
 antigravity-zh-cn/
 scripts/install_plugin.py
 .conductor/
+node_modules/

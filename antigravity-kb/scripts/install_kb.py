@@ -1,6 +1,6 @@
 """
-同步并安装 antigravity-kb 插件至 ~/.gemini/config/plugins/，
-并调用自包含的 plugin_host.py 完成 Antigravity 宿主加载器接入、状态检查或还原。
+同步并安装 antigravity-kb 原生 MCP App 插件至 ~/.gemini/config/plugins/。
+纯官方 MCP Apps 协议，无需修改 Antigravity app.asar 宿主文件。
 """
 
 import os
@@ -12,20 +12,25 @@ PLUGIN_DIR = os.path.dirname(SCRIPT_DIR)
 PLUGINS_ROOT = os.path.join(os.path.expanduser("~"), ".gemini", "config", "plugins")
 PLUGIN_NAME = "antigravity-kb"
 
+LEGACY_FILES = [
+    "hooks.json",
+    os.path.join("scripts", "plugin_host.py"),
+    os.path.join("scripts", "pluginLoader.js"),
+    os.path.join("scripts", "session_hook.py"),
+]
+
 
 def sync_kb_plugin():
+    app_html = os.path.join(PLUGIN_DIR, "app", "dist", "app.html")
+    if not os.path.isfile(app_html):
+        raise FileNotFoundError(f"缺少 MCP App 产物 {app_html}，请先执行 node tools/mcp-app-build/build.mjs")
     dst_dir = os.path.join(PLUGINS_ROOT, PLUGIN_NAME)
     if os.path.abspath(PLUGIN_DIR) == os.path.abspath(dst_dir):
         return dst_dir
     os.makedirs(dst_dir, exist_ok=True)
-    preserve = {
-        "loader.log",
-        "heal.log",
-        "heal_state.json",
-        "kb-config.json",
-    }
+    preserve = {"loader.log", "heal.log", "heal_state.json", "kb-config.json"}
     for root, dirs, files in os.walk(PLUGIN_DIR):
-        dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git")]
+        dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git", "node_modules")]
         rel_root = os.path.relpath(root, PLUGIN_DIR)
         dst_root = dst_dir if rel_root == "." else os.path.join(dst_dir, rel_root)
         os.makedirs(dst_root, exist_ok=True)
@@ -35,45 +40,28 @@ def sync_kb_plugin():
             if rel_root == "runtime" and fn in preserve and os.path.exists(os.path.join(dst_root, fn)):
                 continue
             shutil.copy2(os.path.join(root, fn), os.path.join(dst_root, fn))
-    print(f"已同步 Markdown 知识库插件至: {dst_dir}")
+    for rel in LEGACY_FILES:
+        stale = os.path.join(dst_dir, rel)
+        if os.path.isfile(stale):
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
+    print(f"已同步原生 MCP App 知识库插件至: {dst_dir}")
     return dst_dir
 
 
-def load_plugin_host():
-    if SCRIPT_DIR not in sys.path:
-        sys.path.insert(0, SCRIPT_DIR)
-    import plugin_host  # noqa: E402
-
-    return plugin_host
-
-
 def main():
-    args = sys.argv[1:]
-    explicit = None
-    if "--resources-dir" in args:
-        idx = args.index("--resources-dir")
-        if idx + 1 < len(args):
-            explicit = args[idx + 1]
-            args = args[:idx] + args[idx + 2 :]
-    cmd = args[0] if args else "install"
-
-    if cmd == "sync":
+    cmd = sys.argv[1] if len(sys.argv) > 1 else "install"
+    if cmd in ("sync", "install", "stage"):
         sync_kb_plugin()
-        return
-
-    plugin_host = load_plugin_host()
-    if cmd == "status":
-        plugin_host.cmd_status(explicit)
-    elif cmd == "stage":
-        sync_kb_plugin()
-        plugin_host.cmd_install(stage_only=True, explicit_dir=explicit, do_sync=False)
-    elif cmd == "install":
-        sync_kb_plugin()
-        plugin_host.cmd_install(stage_only=False, explicit_dir=explicit, do_sync=False)
-    elif cmd == "restore":
-        plugin_host.cmd_restore(explicit)
+    elif cmd == "status":
+        dst_dir = os.path.join(PLUGINS_ROOT, PLUGIN_NAME)
+        has_html = os.path.isfile(os.path.join(dst_dir, "app", "dist", "app.html"))
+        has_mcp = os.path.isfile(os.path.join(dst_dir, "mcp_config.json"))
+        print(f"antigravity-kb (native MCP App): installed={os.path.isdir(dst_dir)}, mcp={has_mcp}, html={has_html}")
     else:
-        print(f"未知参数: {cmd} (支持: sync, stage, install, status, restore)")
+        print(f"未知参数: {cmd} (支持: sync, install, status)")
         sys.exit(1)
 
 
