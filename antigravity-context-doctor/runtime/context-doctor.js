@@ -2376,6 +2376,7 @@
         strip,
         hasNativeTabStrip: strip.found,
         left: Math.round(r.left),
+        paneTop: Math.round(r.top),
         top: contentTop,
         width: Math.round(r.width),
         height: Math.max(180, Math.round(r.bottom - contentTop)),
@@ -3151,6 +3152,86 @@
     }
     .sidebar.closed {
       display: none;
+    }
+
+    /* 空右侧栏（启动页无原生标签条时）在原生顶栏内无缝呈现标签页 */
+    .vtab-bar {
+      position: fixed;
+      z-index: 2147483631;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      height: 28px;
+      pointer-events: auto;
+    }
+    .vtab-bar.hidden { display: none; }
+    .vtab-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 28px;
+      padding: 0 7px 0 10px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--fg);
+      opacity: 0.72;
+      font-family: var(--font);
+      font-size: 12.5px;
+      font-weight: 500;
+      line-height: 1;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.12s ease, opacity 0.12s ease, border-color 0.12s ease;
+    }
+    .vtab-pill:hover {
+      opacity: 0.96;
+      background: color-mix(in srgb, var(--fg) 8%, transparent);
+    }
+    .vtab-pill[data-active="true"] {
+      opacity: 1;
+      background: color-mix(in srgb, var(--fg) 12%, transparent);
+      border-color: color-mix(in srgb, var(--fg) 16%, transparent);
+    }
+    .vtab-pct {
+      font-size: 11px;
+      color: var(--fg-muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .vtab-close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      font-size: 11px;
+      line-height: 1;
+      opacity: 0.62;
+      transition: background 0.12s ease, opacity 0.12s ease;
+    }
+    .vtab-close:hover {
+      opacity: 1;
+      background: color-mix(in srgb, var(--fg) 18%, transparent);
+    }
+    .vtab-plus {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--fg-muted);
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+    .vtab-plus:hover {
+      color: var(--fg);
+      background: color-mix(in srgb, var(--fg) 10%, transparent);
     }
 
     /* 顶部栏 + 下划线标签（贴合 Antigravity 原生 Aux Pane 设计规范） */
@@ -3977,7 +4058,48 @@
       toast,
     ]);
 
+    const vTabLbl = h('span', { className: 'vtab-lbl', textContent: '上下文洞察' });
+    const vTabPct = h('span', { className: 'vtab-pct' });
+    const vTabClose = h('span', {
+      className: 'vtab-close',
+      textContent: '✕',
+      title: '关闭标签页',
+      onClick: (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        closeContextDoctor();
+      },
+    });
+    const vTabPill = h(
+      'button',
+      {
+        className: 'vtab-pill',
+        type: 'button',
+        role: 'tab',
+        'data-active': 'true',
+        onClick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openContextDoctorInPane(false);
+        },
+      },
+      [buildGaugeIconSvg(14), vTabLbl, vTabPct, vTabClose]
+    );
+    const vTabPlus = h('button', {
+      className: 'vtab-plus',
+      type: 'button',
+      textContent: '+',
+      title: '新建标签页',
+      onClick: (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        switchAwayFromContextDoctor();
+      },
+    });
+    const vTabBar = h('div', { className: 'vtab-bar hidden', role: 'tablist' }, [vTabPill, vTabPlus]);
+
     root.appendChild(edgeTab);
+    root.appendChild(vTabBar);
     root.appendChild(sidebar);
 
     refs = {
@@ -3987,6 +4109,11 @@
       edgePct,
       edgeBarFill,
       edgeLbl,
+      vTabBar,
+      vTabPill,
+      vTabLbl,
+      vTabPct,
+      vTabPlus,
       sidebar,
       host,
       pinBtn,
@@ -5220,7 +5347,33 @@
       const showEdge = !showPanel && state.prefs.showEdgeTab;
       refs.edgeTab.className = `edge-tab ${showEdge ? '' : 'hidden'}`;
       syncHostThemeToRoot(aux.bgColor || '');
-      if (refs.closeBtn) refs.closeBtn.style.display = mounted ? 'none' : 'inline-flex';
+
+      // 若右侧栏处于无原生标签条的启动页状态，自动在原生顶栏空白区呈现标签页（与原生标签样式一致）
+      const useVirtualTab = Boolean(state.tabOpen && !mounted);
+      if (refs.vTabBar) {
+        if (useVirtualTab) {
+          const isZh = state.isZh;
+          const a = state.computed.activeAnalysis;
+          const pctText = a && a.latestContextTokens > 0 ? `${Math.round(a.occupancyPct)}%` : '';
+          const paneTop = typeof aux.paneTop === 'number' ? aux.paneTop : Math.max(0, aux.top - 44);
+          const barH = Math.max(28, aux.top - paneTop);
+          const tabTop = Math.max(4, Math.round(paneTop + (barH - 28) / 2));
+          refs.vTabBar.style.left = `${aux.left + 12}px`;
+          refs.vTabBar.style.top = `${tabTop}px`;
+          refs.vTabBar.style.maxWidth = `${Math.max(120, aux.width - 96)}px`;
+          refs.vTabBar.className = 'vtab-bar';
+          refs.vTabPill.setAttribute('data-active', showPanel ? 'true' : 'false');
+          refs.vTabPill.setAttribute('aria-selected', showPanel ? 'true' : 'false');
+          refs.vTabLbl.textContent = isZh ? '上下文洞察' : 'Context Doctor';
+          refs.vTabPct.textContent = pctText;
+          refs.vTabPct.style.display = pctText ? '' : 'none';
+          refs.vTabPlus.title = isZh ? '新建标签页' : 'New Tab';
+        } else {
+          refs.vTabBar.className = 'vtab-bar hidden';
+        }
+      }
+
+      if (refs.closeBtn) refs.closeBtn.style.display = mounted || useVirtualTab ? 'none' : 'inline-flex';
       if (!showPanel) {
         refs.sidebar.className = 'sidebar closed';
         return;
@@ -5236,6 +5389,7 @@
     }
 
     // 原生右侧边栏未打开或刚被关闭
+    if (refs.vTabBar) refs.vTabBar.className = 'vtab-bar hidden';
     if (state.openedInNativePane) {
       state.openedInNativePane = false;
       state.allowFloatingFallback = false;

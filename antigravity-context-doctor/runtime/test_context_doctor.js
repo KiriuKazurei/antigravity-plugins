@@ -1013,6 +1013,29 @@ assert.strictEqual(msgPara.querySelectorAll('[data-agy-cd-tab="1"]').length, 0, 
 assert(isClosed(), 'auto-restore when right pane is closed must stay hidden');
 domApi.closeContextDoctor();
 
+// 回归验证 6：空右侧边栏（启动页无原生标签条）打开上下文洞察时，顶栏必须呈现标签页 + 「+」按钮，且在原生标签条出现后自动切换交接
+chatPane._rect = { left: 0, top: 0, right: 520, bottom: 800, width: 520, height: 800 };
+composerEl._rect = { left: 20, top: 700, right: 500, bottom: 780, width: 480, height: 80 };
+const emptyAuxPane = makeFakeElement('div');
+emptyAuxPane._rect = { left: 520, top: 60, right: 1280, bottom: 800, width: 760, height: 740 };
+splitRoot.appendChild(emptyAuxPane);
+domApi.openContextDoctorInPane(false);
+const vTabBar = hostEl.shadowRoot.querySelector('.vtab-bar');
+assert(vTabBar && !vTabBar.className.includes('hidden'), 'empty right pane must render top-bar tab strip');
+assert.strictEqual(vTabBar.style.left, '532px');
+assert.strictEqual(hostEl.shadowRoot.querySelector('.vtab-pill').getAttribute('data-active'), 'true');
+hostEl.shadowRoot.querySelector('.vtab-plus').listeners.click[0](clickEvent(vTabBar));
+assert(isClosed() && !vTabBar.className.includes('hidden'), 'clicking + must reveal launcher while keeping inactive tab');
+assert.strictEqual(hostEl.shadowRoot.querySelector('.vtab-pill').getAttribute('data-active'), 'false');
+hostEl.shadowRoot.querySelector('.vtab-pill').listeners.click[0](clickEvent(vTabBar));
+assert(!isClosed() && hostEl.shadowRoot.querySelector('.vtab-pill').getAttribute('data-active') === 'true');
+emptyAuxPane.appendChild(replacedStrip);
+domApi.renderAll();
+assert(vTabBar.className.includes('hidden'), 'virtual top-bar tab must hide once native tab strip appears');
+assert.strictEqual(replacedStrip.querySelectorAll('[data-agy-cd-tab="1"]').length, 1);
+domApi.closeContextDoctor();
+splitRoot.removeChild(emptyAuxPane);
+
 fakeDoc.body.children = prevChildren;
 
 console.log('All antigravity-context-doctor tests passed!');
